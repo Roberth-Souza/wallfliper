@@ -67,9 +67,19 @@ Install from source — works on any supported compositor:
 | `mpvpaper` | video wallpapers | video support |
 | `ffmpeg` | video thumbnails, previews & color extraction | video extras |
 
-Install them from your package manager (names vary, e.g. `python3-pyside6`). `swww` and
-`mpvpaper` are usually **not packaged** outside Arch — build them from source (both have
-simple instructions):
+**On Arch / CachyOS** — copy-paste:
+
+```fish
+# official repos
+sudo pacman -S pyside6 layer-shell-qt swww ffmpeg
+
+# video backend (AUR — use your helper)
+paru -S mpvpaper        # or: yay -S mpvpaper
+```
+
+**On other distros** — install them with your package manager (names vary, e.g.
+`python3-pyside6`). `swww` and `mpvpaper` are usually **not packaged** outside Arch —
+build them from source (both have simple instructions):
 
 - **swww** → <https://github.com/LGFae/swww> (Rust)
 - **mpvpaper** → <https://github.com/GhostNaN/mpvpaper>
