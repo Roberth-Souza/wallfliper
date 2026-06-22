@@ -130,20 +130,13 @@ Hyprland blurs *windows* by default, but **not** layer-shell surfaces — so Wal
 starts out unblurred. To get the frosted-glass panel, add a layer rule for its
 `wallfliper` namespace:
 
-```ini
-layerrule = blur, wallfliper
-layerrule = ignorealpha 0.5, wallfliper
+```lua
+hl.layer_rule({ name = "wallfliper", match = { namespace = "wallfliper" }, blur = true, ignore_alpha = 0.5 })
 ```
 
-`ignorealpha` keeps blur off the fully-transparent click-away margin (and the rounded
-corners), so only the panel frosts. The panel is fairly opaque by default, so lower
 **background** in Settings to actually see the blur.
 
-> **Lua config?**
-> ```lua
-> hl.layer_rule({ name = "wallfliper", match = { namespace = "wallfliper" }, blur = true, ignore_alpha = 0.5 })
-> ```
-> Verify the namespace any time with `hyprctl layers` while Wallfliper is open.
+Verify the namespace any time with `hyprctl layers` while Wallfliper is open.
 
 Other `wlr-layer-shell` compositors expose their own blur mechanism (or none) — consult
 their docs; Wallfliper just provides the transparent surface for them to blur.
