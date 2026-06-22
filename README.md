@@ -28,7 +28,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 
 ## ✨ Features
 
-- **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to fuzzy-filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
+- **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
 - **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
 - **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
 - **Audition mode** — `Space` applies a wallpaper but keeps the picker open, so you can flip through options on your real desktop.
@@ -96,15 +96,15 @@ python main.py                # launch
 
 ## ⌨️ Usage
 
-### Recomended
+### Recommended
 
 Bind `wallfliper` (or `python /path/to/main.py`) to a compositor hotkey. Pressing the
-hotkey again while it's open closes it , it's a toggle.
+hotkey again while it's open closes it — it's a toggle.
 
 | Key | Action |
 | --- | --- |
 | `↑ ↓ ← →` · `h j k l` · `w a s d` | Move selection |
-| `/` | Start searching — then type to fuzzy-filter |
+| `/` | Start searching — then type to filter |
 | `Backspace` | Edit the filter (empty filter → leave search) |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
@@ -113,7 +113,7 @@ hotkey again while it's open closes it , it's a toggle.
 | Click outside the panel | Close |
 | ⚙ (gear) | Open settings |
 
-Applying an image stops any running video wallpaper , there's only ever one wallpaper at a time.
+Applying an image stops any running video wallpaper — there's only ever one wallpaper at a time.
 
 ### ⚙️ Settings
 
@@ -133,7 +133,7 @@ starts out unblurred. To get the frosted-glass panel, add a layer rule for its
 hl.layer_rule({ name = "wallfliper", match = { namespace = "wallfliper" }, blur = true, ignore_alpha = 0.5 })
 ```
 
-**background** in Settings to actually see the blur.
+Lower the **background** opacity in Settings to actually see the blur through it.
 
 Verify the namespace any time with `hyprctl layers` while Wallfliper is open.
 
