@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+
+# Editor settings (machine-local)
+.vscode/
+
+# Agent/design docs kept local, not published
+CLAUDE.md
+DESIGN.md

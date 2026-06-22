@@ -1,0 +1,10 @@
+# Python (pip) dependency. For development you can `pip install -r requirements.txt`
+# into a venv. For distribution, prefer the system PySide6 package so its Qt
+# matches the system layer-shell-qt (the overlay plugin is loaded into Qt at runtime).
+#
+# System runtime deps (install via your package manager, NOT pip):
+#   layer-shell-qt   - wlr-layer-shell overlay (org.kde.layershell QML module)
+#   swww  (or awww)  - image wallpapers
+#   mpvpaper         - video wallpapers
+#   ffmpeg           - video thumbnails, animated previews, and color-frame extraction
+PySide6>=6.7
