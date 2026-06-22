@@ -70,11 +70,9 @@ Install from source — works on any supported compositor:
 **On Arch / CachyOS** — copy-paste:
 
 ```fish
-# official repos
 sudo pacman -S pyside6 layer-shell-qt swww ffmpeg
 
-# video backend (AUR — use your helper)
-paru -S mpvpaper        # or: yay -S mpvpaper
+paru -S mpvpaper
 ```
 
 **On other distros** — install them with your package manager (names vary, e.g.
