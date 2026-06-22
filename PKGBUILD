@@ -1,11 +1,4 @@
 # Maintainer: Roberth <roberth.halk@gmail.com>
-#
-# AUR PKGBUILD draft. Not submittable yet — it needs a published GitHub repo and a
-# tagged release (v1.0.0) so the `source` tarball below actually resolves.
-# Before submitting:
-#   1. Push the repo to github.com/Roberth-Souza/wallfliper and tag v1.0.0.
-#   2. Run `updpkgsums` to fill the real sha256, then `makepkg --printsrcinfo > .SRCINFO`.
-#   3. Test locally with `makepkg -si` before pushing to the AUR.
 
 pkgname=wallfliper
 pkgver=1.0.0
@@ -15,21 +8,13 @@ arch=('any')
 url="https://github.com/Roberth-Souza/wallfliper"
 license=('GPL-3.0-or-later')
 
-# Hard requirements — without these the app cannot start.
 depends=(
   'python'
   'pyside6'
   'layer-shell-qt'
-)
-
-# Wallpaper backends + media tooling. They're optdepends because the app runs and
-# degrades gracefully without them (it tells you in the status bar what's missing).
-# If you'd rather `paru -S wallfliper` pull a fully-loaded setup in one shot, move
-# 'swww', 'mpvpaper', and 'ffmpeg' up into depends=() instead.
-optdepends=(
-  'swww: image wallpapers (or its fork awww)'
-  'mpvpaper: video wallpapers'
-  'ffmpeg: video thumbnails, previews, and color-frame extraction'
+  'swww'
+  'mpvpaper'
+  'ffmpeg'
 )
 
 makedepends=(
