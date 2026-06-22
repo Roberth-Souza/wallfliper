@@ -48,19 +48,7 @@ Out of scope (no layer-shell, or only partial): KDE Plasma, GNOME, X11, Windows.
 
 ## 📦 Installation
 
-### Arch / CachyOS — recommended
-
-One command pulls Wallfliper **and every dependency** (Qt, layer-shell, swww, mpvpaper, ffmpeg):
-
-```fish
-paru -S wallfliper        # or: yay -S wallfliper
-```
-
-`wallfliper` is now on your `$PATH` — bind it to a compositor hotkey and go.
-
-> **Not on the AUR yet** — it lands with the first release. Until then, use the manual install below.
-
-### Manual install (other distros / from source)
+Install from source — works on any supported compositor:
 
 > [!IMPORTANT]
 > **Install PySide6 from your distribution, not pip.** `layer-shell-qt` is a compiled
