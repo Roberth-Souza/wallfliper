@@ -75,16 +75,7 @@ class WlrootsBackend(WallpaperBackend):
 
     def set_video(self, path: Path) -> None:
         mpvpaper = self._require("mpvpaper")
-        # Note the mpvpaper already painting (if any) so we can retire it *after*
-        # the new one is up, not before — see the seamless-swap rationale below.
         old_pids = self._mpvpaper_pids()
-        # Idempotent restore: if exactly one mpvpaper is already rendering THIS
-        # file, there is nothing to do — re-spawning would only stack a second
-        # GPU-heavy decoder on the same output (freeze + downscale). This makes a
-        # redundant `--restore` (e.g. a stray .desktop autostart firing on top of
-        # the compositor's exec line) a harmless no-op. A *broken* state — zero,
-        # or two-plus instances — deliberately falls through to the spawn+retire
-        # path below, so a manual re-apply still recovers a stuck wallpaper.
         if len(old_pids) == 1 and self._video_path_of(old_pids[0]) == str(path):
             return
         # -p: auto-pause when hidden (the MVP fullscreen auto-pause).
