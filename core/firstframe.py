@@ -44,10 +44,14 @@ def first_frame(video: Path) -> Path | None:
         return None  # file vanished between selection and apply → hard-cut fallback
     if dest.exists():
         return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    # Unique tmp per call (atomic, and safe when the on-selection warm races the
-    # synchronous extraction at apply time — both could target the same dest).
-    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".ff-", suffix=".png")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Unique tmp per call (atomic, and safe when the on-selection warm races
+        # the synchronous extraction at apply time — both could target the same
+        # dest).
+        fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".ff-", suffix=".png")
+    except OSError:
+        return None  # unwritable cache dir / full disk → hard-cut fallback
     os.close(fd)
     tmp = Path(tmp_name)
     cmd = [
