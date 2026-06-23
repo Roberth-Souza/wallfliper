@@ -60,7 +60,11 @@ Window {
 
         // Swallow clicks on the panel so they don't fall through to dismissArea;
         // only clicks on the transparent margin outside the card close the app.
-        MouseArea { anchors.fill: parent }
+        // While searching, a click on empty panel chrome cancels search.
+        MouseArea {
+            anchors.fill: parent
+            onClicked: if (win.searching) win.exitSearchClear()
+        }
     }
 
     // Toggles the lazy settings overlay (gear icon). Closed = panel unloaded.
@@ -70,6 +74,11 @@ Window {
     // the w/a/s/d + h/j/k/l navigation and space — stay free as commands in
     // normal mode. Once searching, every printable key filters live (any
     // filename is typable); arrows still move. Shown in the top bar as `/<query>`.
+    //
+    // Leaving search has two flavors: `Enter`, an arrow key, or clicking a
+    // result *confirms* the filter (exitSearchKeep — drop to normal nav, query
+    // kept, grid stays filtered); `Esc`, `/` again, or clicking empty app chrome
+    // *cancels* it (exitSearchClear — wipe the query, full grid returns).
     property string searchText: ""
     property bool searching: false
     onSearchTextChanged: {
@@ -89,6 +98,19 @@ Window {
             return
         controller.apply(grid.currentIndex)
         Qt.quit()
+    }
+
+    // Leave search input mode but keep the query and filtered grid (Enter or
+    // clicking a result). Selection is preserved; press `/` to resume editing.
+    function exitSearchKeep() {
+        win.searching = false
+    }
+
+    // Leave search mode and clear the query, restoring the full grid (Esc, `/`
+    // again, or clicking empty app chrome).
+    function exitSearchClear() {
+        win.searching = false
+        win.searchText = ""
     }
 
     function openFolderPicker() {
@@ -117,30 +139,41 @@ Window {
         Keys.onPressed: (event) => {
             // Esc always exits immediately, in either mode.
             if (event.key === Qt.Key_Escape) {
-                Qt.quit()
+                if (win.searching)
+                    win.exitSearchClear()
+                else
+                    Qt.quit()
                 event.accepted = true
                 return
             }
 
             if (win.searching) {
                 // Search mode: every printable key (incl. w/a/s/d, h/j/k/l and
-                // space) is part of the query so any filename is typable. Arrows
-                // still move the selection; Enter applies the match and exits.
+                // space) is part of the query so any filename is typable. An
+                // arrow key navigates results, not the query, so it confirms the
+                // filter (keeps the query, drops to normal nav) and moves; Enter
+                // confirms without moving; `/` again cancels it.
                 if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                    win.applyAndExit()
-                else if (event.key === Qt.Key_Up)
+                    win.exitSearchKeep()
+                else if (event.key === Qt.Key_Up) {
+                    win.exitSearchKeep()
                     grid.moveCurrentIndexUp()
-                else if (event.key === Qt.Key_Down)
+                } else if (event.key === Qt.Key_Down) {
+                    win.exitSearchKeep()
                     grid.moveCurrentIndexDown()
-                else if (event.key === Qt.Key_Left)
+                } else if (event.key === Qt.Key_Left) {
+                    win.exitSearchKeep()
                     grid.moveCurrentIndexLeft()
-                else if (event.key === Qt.Key_Right)
+                } else if (event.key === Qt.Key_Right) {
+                    win.exitSearchKeep()
                     grid.moveCurrentIndexRight()
+                } else if (event.text === "/")
+                    win.exitSearchClear()  // press `/` again to leave and clear
                 else if (event.key === Qt.Key_Backspace) {
-                    // Backspace on an empty query leaves search mode (the inverse
-                    // of `/`); otherwise it edits the query.
+                    // Backspace on an empty query leaves search mode; otherwise
+                    // it edits the query.
                     if (win.searchText === "")
-                        win.searching = false
+                        win.exitSearchKeep()
                     else
                         win.searchText = win.searchText.slice(0, -1)
                 } else if (event.text.length === 1 && event.text >= " ")
@@ -213,8 +246,10 @@ Window {
             Text {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: win.searching ? "/" + win.searchText : "/  search"
-                color: win.searching ? "#ffffff" : "#4a4a4a"
+                text: (win.searching || win.searchText !== "") ? "/" + win.searchText : "/  search"
+                // White while editing; grey when a filter persists after leaving
+                // search (so the active filter is never hidden); faint when idle.
+                color: win.searching ? "#ffffff" : (win.searchText !== "" ? "#909090" : "#4a4a4a")
                 font.pixelSize: 14
             }
         }
@@ -318,7 +353,13 @@ Window {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: grid.currentIndex = cell.index
+                    // Clicking a result selects it and leaves search mode, but
+                    // keeps the query/filter so the selection stays valid.
+                    onClicked: {
+                        grid.currentIndex = cell.index
+                        if (win.searching)
+                            win.exitSearchKeep()
+                    }
                     onDoubleClicked: { grid.currentIndex = cell.index; win.applyAndExit() }
                 }
             }
