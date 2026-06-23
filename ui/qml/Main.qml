@@ -141,9 +141,9 @@ Window {
         property bool active: false
         signal toggled()
 
-        width: 42
-        height: 34
-        radius: controller.corners === "sharp" ? 0 : 8
+        width: 28
+        height: 22
+        radius: controller.corners === "sharp" ? 0 : 6
         color: "transparent"
         border.color: fbtn.active ? "#ffffff" : "#4a4a4a"
         border.width: fbtn.active ? 2 : 1
@@ -152,10 +152,10 @@ Window {
             anchors.centerIn: parent
             source: fbtn.icon
             // Rasterize the SVG at 2x the display size for a crisp edge on HiDPI.
-            sourceSize.width: 40
-            sourceSize.height: 40
-            width: 20
-            height: 20
+            sourceSize.width: 28
+            sourceSize.height: 28
+            width: 14
+            height: 14
             smooth: true
             opacity: fbtn.active ? 1.0 : 0.5
         }
