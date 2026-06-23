@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,24 @@ from .base import (
 
 
 _SWWW_CANDIDATES = ("swww", "awww")
+
+# swww's animated transitions minus 'fade'. We resolve 'random' from this pool
+# ourselves rather than passing swww's own 'random', which can land on fade.
+# Fade finishes visually well before the transition duration, so the seamless
+# video lead-in (which keeps mpvpaper paused for the full duration) would sit on
+# a frozen frame after the animation is already done. The instant 'none'/'simple'
+# switches are excluded too — these are the actual animations.
+_RANDOM_TRANSITIONS = (
+    "wipe",
+    "wave",
+    "grow",
+    "center",
+    "outer",
+    "left",
+    "right",
+    "top",
+    "bottom",
+)
 
 # mpv options passed through to mpvpaper via -o. Tuned for robust, quiet, looping
 # playback. no-config isolates from the user's ~/.config/mpv: a custom mpv.conf
@@ -87,9 +106,13 @@ class WlrootsBackend(WallpaperBackend):
         """Translate a transition choice into swww `--transition-*` flags."""
         if transition is None:
             return []
-        args = ["--transition-type", transition.type, "--transition-fps", str(transition.fps)]
+        ttype = transition.type
+        # Resolve 'random' here (excluding fade) instead of letting swww pick.
+        if ttype == "random":
+            ttype = random.choice(_RANDOM_TRANSITIONS)
+        args = ["--transition-type", ttype, "--transition-fps", str(transition.fps)]
         # swww ignores duration for the instant 'none'/'simple' switch.
-        if transition.type not in ("none", "simple"):
+        if ttype not in ("none", "simple"):
             args += ["--transition-duration", str(transition.duration)]
         return args
 
