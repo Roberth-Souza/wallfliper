@@ -78,6 +78,15 @@ class WlrootsBackend(WallpaperBackend):
         # Note the mpvpaper already painting (if any) so we can retire it *after*
         # the new one is up, not before — see the seamless-swap rationale below.
         old_pids = self._mpvpaper_pids()
+        # Idempotent restore: if exactly one mpvpaper is already rendering THIS
+        # file, there is nothing to do — re-spawning would only stack a second
+        # GPU-heavy decoder on the same output (freeze + downscale). This makes a
+        # redundant `--restore` (e.g. a stray .desktop autostart firing on top of
+        # the compositor's exec line) a harmless no-op. A *broken* state — zero,
+        # or two-plus instances — deliberately falls through to the spawn+retire
+        # path below, so a manual re-apply still recovers a stuck wallpaper.
+        if len(old_pids) == 1 and self._video_path_of(old_pids[0]) == str(path):
+            return
         # -p: auto-pause when hidden (the MVP fullscreen auto-pause).
         self._spawn_detached(
             [mpvpaper, "-p", "-o", _MPV_OPTIONS, _ALL_OUTPUTS, str(path)]
@@ -136,6 +145,22 @@ class WlrootsBackend(WallpaperBackend):
             check=False,
         )
         return [int(pid) for pid in result.stdout.split()]
+
+    @staticmethod
+    def _video_path_of(pid: int) -> str | None:
+        """The media file an mpvpaper PID is playing (its last argv entry), or None.
+
+        Read from /proc/<pid>/cmdline (NUL-separated argv). mpvpaper's media path
+        is the final argument, after the options and the `*` output selector — the
+        same way we launch it in set_video. Used to detect an already-correct
+        wallpaper so a redundant restore can no-op instead of stacking a duplicate.
+        """
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                argv = [field for field in fh.read().split(b"\x00") if field]
+        except OSError:
+            return None
+        return argv[-1].decode("utf-8", "replace") if argv else None
 
     @staticmethod
     def _retire_pids(pids: list[int]) -> None:
