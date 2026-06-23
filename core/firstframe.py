@@ -72,7 +72,11 @@ def first_frame(video: Path) -> Path | None:
     if result.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
         return None
-    tmp.replace(dest)  # atomic; a concurrent extraction just lands the same bytes
+    try:
+        tmp.replace(dest)  # atomic; a concurrent extraction just lands the same bytes
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return None
     return dest
 
 
