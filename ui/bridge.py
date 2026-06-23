@@ -11,10 +11,11 @@ from urllib.parse import urlparse, unquote
 
 from PySide6.QtCore import (
     Property,
+    QModelIndex,
     QObject,
+    QPersistentModelIndex,
     QSize,
     QSortFilterProxyModel,
-    Qt,
     Signal,
     Slot,
 )
@@ -29,9 +30,49 @@ from core.previews import PreviewLoader
 from core.state import Config, load_config, save_config, save_state
 from core.thumbnails import ThumbnailLoader
 
-from .model import WallpaperModel
+from .model import KIND_ROLE, NAME_ROLE, WallpaperModel
 
 _THUMB_SIZE = QSize(440, 248)
+
+# Qt hands filterAcceptsRow a transient or persistent index; accept the union
+# the base declares so type-checkers don't flag a narrowed override.
+_Index = QModelIndex | QPersistentModelIndex
+
+
+class _WallpaperFilterProxy(QSortFilterProxyModel):
+    """Combine a case-insensitive name substring filter with a kind filter.
+
+    The built-in fixed-string filter only matches a single role, but the
+    image/video toggles need a second predicate, so filterAcceptsRow applies
+    both. An empty kind set means "all kinds" (no filtering by kind).
+    """
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._text = ""
+        self._kinds: frozenset[str] = frozenset()
+
+    def set_text(self, text: str) -> None:
+        text = text.lower()
+        if text != self._text:
+            self._text = text
+            self.invalidateFilter()
+
+    def set_kinds(self, kinds: frozenset[str]) -> None:
+        if kinds != self._kinds:
+            self._kinds = kinds
+            self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: _Index) -> bool:
+        model = self.sourceModel()
+        index = model.index(source_row, 0, source_parent)
+        if self._kinds and model.data(index, KIND_ROLE) not in self._kinds:
+            return False
+        if self._text:
+            name = model.data(index, NAME_ROLE) or ""
+            if self._text not in name.lower():
+                return False
+        return True
 
 
 class Controller(QObject):
@@ -40,6 +81,8 @@ class Controller(QObject):
     cornersChanged = Signal()
     backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
+    imageFilterChanged = Signal()
+    videoFilterChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -49,21 +92,16 @@ class Controller(QObject):
         self._loader = ThumbnailLoader(_THUMB_SIZE, self)
         self._previews = PreviewLoader(self)
         self._model = WallpaperModel(self._loader, self._previews, self)
-        self._proxy = QSortFilterProxyModel(self)
+        self._proxy = _WallpaperFilterProxy(self)
         self._proxy.setSourceModel(self._model)
-        self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._proxy.setFilterRole(self._role("name"))
+        # Kind toggles: each is independent. None or both active = all kinds.
+        self._image_filter = False
+        self._video_filter = False
 
         self._backend = get_backend()
         self._config: Config = load_config()
         self._status = ""
         self.reload()
-
-    def _role(self, name: str) -> int:
-        for role, rname in self._model.roleNames().items():
-            if bytes(rname.data()) == name.encode():
-                return role
-        return Qt.ItemDataRole.DisplayRole
 
     # --- properties exposed to QML --------------------------------------
 
@@ -87,11 +125,39 @@ class Controller(QObject):
     def backgroundOpacity(self) -> float:
         return self._config.background_opacity
 
+    @Property(bool, notify=imageFilterChanged)
+    def imageFilter(self) -> bool:
+        return self._image_filter
+
+    @Property(bool, notify=videoFilterChanged)
+    def videoFilter(self) -> bool:
+        return self._video_filter
+
     # --- slots called from QML ------------------------------------------
 
     @Slot(str)
     def setFilter(self, text: str) -> None:
-        self._proxy.setFilterFixedString(text)
+        self._proxy.set_text(text)
+
+    @Slot()
+    def toggleImageFilter(self) -> None:
+        self._image_filter = not self._image_filter
+        self.imageFilterChanged.emit()
+        self._apply_kind_filter()
+
+    @Slot()
+    def toggleVideoFilter(self) -> None:
+        self._video_filter = not self._video_filter
+        self.videoFilterChanged.emit()
+        self._apply_kind_filter()
+
+    def _apply_kind_filter(self) -> None:
+        kinds: set[str] = set()
+        if self._image_filter:
+            kinds.add("image")
+        if self._video_filter:
+            kinds.add("video")
+        self._proxy.set_kinds(frozenset(kinds))
 
     @Slot(int)
     def ensurePreview(self, proxy_row: int) -> None:

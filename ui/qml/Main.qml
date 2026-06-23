@@ -130,6 +130,42 @@ Window {
         function onFolderPickerClosed() { win.closeFolderPicker() }
     }
 
+    // A filter toggle (image / video). White line icon at full opacity +
+    // white outline when active; dimmed to grey when off — the same
+    // white-selection language as the grid. Corners follow the global corner
+    // setting. The icon is a monochrome SVG from assets/icons (white stroke),
+    // greyed for the off state by lowering opacity over the dark backdrop.
+    component FilterButton: Rectangle {
+        id: fbtn
+        property url icon
+        property bool active: false
+        signal toggled()
+
+        width: 42
+        height: 34
+        radius: controller.corners === "sharp" ? 0 : 8
+        color: "transparent"
+        border.color: fbtn.active ? "#ffffff" : "#4a4a4a"
+        border.width: fbtn.active ? 2 : 1
+
+        Image {
+            anchors.centerIn: parent
+            source: fbtn.icon
+            // Rasterize the SVG at 2x the display size for a crisp edge on HiDPI.
+            sourceSize.width: 40
+            sourceSize.height: 40
+            width: 20
+            height: 20
+            smooth: true
+            opacity: fbtn.active ? 1.0 : 0.5
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: fbtn.toggled()
+        }
+    }
+
     FocusScope {
         id: mainScope
         anchors.fill: bg
@@ -191,6 +227,10 @@ Window {
                 win.applyCurrent()  // audition: apply but stay
             else if (event.text === "/")
                 win.searching = true
+            else if (event.text === "i")
+                controller.toggleImageFilter()
+            else if (event.text === "v")
+                controller.toggleVideoFilter()
             else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K)
                 grid.moveCurrentIndexUp()
             else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J)
@@ -254,11 +294,31 @@ Window {
             }
         }
 
+        // ---- Filter toggles: image / video, below the search hint ----
+        Row {
+            id: filterBar
+            anchors.top: topBar.bottom
+            anchors.topMargin: 8
+            anchors.right: parent.right
+            spacing: 8
+
+            FilterButton {
+                icon: "../../assets/icons/image.svg"
+                active: controller.imageFilter
+                onToggled: controller.toggleImageFilter()
+            }
+            FilterButton {
+                icon: "../../assets/icons/video.svg"
+                active: controller.videoFilter
+                onToggled: controller.toggleVideoFilter()
+            }
+        }
+
         // ---- Grid ----
         GridView {
             id: grid
-            anchors.top: topBar.bottom
-            anchors.topMargin: 14
+            anchors.top: filterBar.bottom
+            anchors.topMargin: 12
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: statusBar.top
