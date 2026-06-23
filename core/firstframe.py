@@ -38,7 +38,10 @@ def first_frame(video: Path) -> Path | None:
     """
     if not shutil.which("ffmpeg"):
         return None
-    dest = _cache_path(video)
+    try:
+        dest = _cache_path(video)
+    except OSError:
+        return None  # file vanished between selection and apply → hard-cut fallback
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
