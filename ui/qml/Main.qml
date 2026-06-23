@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Window
-import QtQuick.Dialogs
 import org.kde.layershell as LayerShell
 
 Window {
@@ -25,9 +24,9 @@ Window {
     // the keyboard the moment the pointer leaves the surface — defocusing on
     // hover-out. Exclusive ignores pointer position entirely; you stay focused
     // while browsing and close with Esc / apply, not by drifting the mouse off.
-    // The folder picker stays reachable because openFolderPicker() unmaps our
-    // surface (win.visible = false) before opening the dialog, releasing the
-    // grab so the portal chooser gets the keyboard.
+    // The folder picker stays reachable because openFolderPicker() hides the
+    // surface (visible = false), releasing the keyboard grab so the portal
+    // chooser is topmost and focused.
     LayerShell.Window.scope: "wallfliper"
     LayerShell.Window.layer: LayerShell.Window.LayerOverlay
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityExclusive
@@ -85,12 +84,6 @@ Window {
             controller.apply(grid.currentIndex)
     }
 
-    // Enter: apply, then exit immediately. The swww transition runs in its own
-    // detached daemon (mpvpaper is detached too), so the wallpaper keeps
-    // animating on the revealed desktop after we're gone — quitting at once
-    // never cuts it short. Exiting immediately also frees the single-instance
-    // lock right away, so pressing the launch hotkey reopens wallfliper
-    // instantly instead of toggling a process that's still lingering.
     function applyAndExit() {
         if (grid.currentIndex < 0)
             return
@@ -98,30 +91,21 @@ Window {
         Qt.quit()
     }
 
-    // Opening the picker hides the overlay: wallfliper lives on the layer-shell
-    // overlay layer (always above normal windows), so the portal's file manager
-    // (e.g. yazi via termfilechooser) can never render above it and can't take
-    // the keyboard while we're mapped. Hiding unmaps our surface so the picker
-    // is topmost and focused; we re-show when it returns.
     function openFolderPicker() {
         win.visible = false
-        folderDialog.open()
+        controller.pickFolder()
     }
 
-    FolderDialog {
-        id: folderDialog
-        title: "Choose wallpaper folder"
-        onAccepted: {
-            controller.setFolder(selectedFolder.toString())
-            win.visible = true
-            if (settingsLoader.item)
-                settingsLoader.item.forceActiveFocus()
-        }
-        onRejected: {
-            win.visible = true
-            if (settingsLoader.item)
-                settingsLoader.item.forceActiveFocus()
-        }
+    // Re-map the overlay after the picker closes (chosen, cancelled, or failed).
+    function closeFolderPicker() {
+        win.visible = true
+        if (settingsLoader.item)
+            settingsLoader.item.forceActiveFocus()
+    }
+
+    Connections {
+        target: controller
+        function onFolderPickerClosed() { win.closeFolderPicker() }
     }
 
     FocusScope {
