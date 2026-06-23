@@ -26,12 +26,18 @@ from .base import (
 
 _SWWW_CANDIDATES = ("swww", "awww")
 
-# mpv options passed through to mpvpaper via -o. Tuned for smooth, quiet, looping
-# playback: no audio, hardware decode, high-quality scaling and interpolation.
+# mpv options passed through to mpvpaper via -o. Tuned for robust, quiet, looping
+# playback. no-config isolates from the user's ~/.config/mpv: a custom mpv.conf
+# (broken hwdec/vo, scripts) is a common cause of a wallpaper that never plays.
+# no-osd hides mpv's corner messages over the wallpaper; pause=no starts playing
+# at once. Hardware decode + high-quality scaling/interpolation do the rest.
 _MPV_OPTIONS = " ".join(
     [
         "loop",
         "--no-audio",
+        "no-config",
+        "no-osd",
+        "pause=no",
         "--hwdec=auto",
         "--profile=high-quality",
         "--video-sync=display-resample",
