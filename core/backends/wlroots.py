@@ -83,7 +83,7 @@ _VIDEO_SWAP_DELAY_S = 0.8
 # large maps mpv (frozen on frame 0) over the transition's last frames. The
 # detached driver gates the unpause on the full duration regardless, so motion
 # never begins before the animation visually ends.
-_MPV_PREWARM_S = 0.4
+_MPV_PREWARM_S = 0.6
 _SEAMLESS_DRIVER = Path(__file__).resolve().parent.parent / "seamless.py"
 
 
