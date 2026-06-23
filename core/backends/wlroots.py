@@ -26,7 +26,8 @@ from .base import (
 
 _SWWW_CANDIDATES = ("swww", "awww")
 
-# mpv options passed through to mpvpaper via -o. Tuned for smooth, quiet,
+# mpv options passed through to mpvpaper via -o. Tuned for smooth, quiet, looping
+# playback: no audio, hardware decode, high-quality scaling and interpolation.
 _MPV_OPTIONS = " ".join(
     [
         "loop",

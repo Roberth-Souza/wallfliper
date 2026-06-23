@@ -18,10 +18,10 @@ from pathlib import Path
 class ImageTransition:
     """How swww animates the switch to a new still image.
 
-    `type` is one of swww's `--transition-type` values. Only
-    images animate video, has no equivalent. `type == "none"` is an instant
-    switch (and ignores duration, like swww does). Currently fixed to a random
-    transition; a per-user picker may come back later.
+    `type` is one of swww's `--transition-type` values. Only images animate;
+    video has no equivalent. `type == "none"` is an instant switch (and ignores
+    duration, like swww does). Currently fixed to a random transition; a
+    per-user picker may come back later.
     """
 
     type: str = "random"
