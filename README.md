@@ -98,8 +98,22 @@ python main.py                # launch
 
 ### Recommended
 
-Bind `wallfliper` (or `python /path/to/main.py`) to a compositor hotkey. Pressing the
-hotkey again while it's open closes it — it's a toggle.
+Bind Wallfliper to a compositor hotkey. Pressing the hotkey again while it's open
+closes it — it's a toggle.
+
+```lua
+-- Hyprland (Lua config) — ~/.config/hypr/modules/keybinds.lua
+hl.bind("SUPER + W", hl.dsp.exec_cmd("python /path/to/wallfliper/main.py"))
+```
+```ini
+# Sway — ~/.config/sway/config
+bindsym $mod+w exec python /path/to/wallfliper/main.py
+```
+```kdl
+# niri — ~/.config/niri/config.kdl
+binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
+```
+---
 
 | Key | Action |
 | --- | --- |
@@ -142,12 +156,52 @@ their docs; Wallfliper just provides the transparent surface for them to blur.
 
 ## 🔁 Restore on login
 
-Wallfliper saves the last-applied wallpaper. To re-apply it (so a video wallpaper survives a reboot):
+Wallfliper saves the last-applied wallpaper to `~/.config/wallfliper/state.json`.
+`wallfliper --restore` reads that and re-spawns `swww`/`mpvpaper` — so a **video
+wallpaper survives a reboot**. (Wallfliper itself doesn't stay running; it just hands
+the file back to the renderer and exits — mpvpaper is stateless and dies on reboot,
+so something has to re-launch it, and that's all `--restore` does.)
 
 ```fish
-wallfliper --restore            # re-apply now
-wallfliper --install-autostart  # run --restore automatically on login
+python /path/to/wallfliper/main.py --restore   # re-apply the saved wallpaper now
 ```
+
+**Run it on login from your compositor's autostart**, wrapped in a short `sleep` so the
+compositor finishes bringing up your desktop first. Without the delay a *video* wallpaper
+can come up frozen on a low-res frame: mid-boot the wallpaper surface is briefly reported
+as "hidden", which trips `mpvpaper`'s auto-pause (a known mpvpaper quirk). A few seconds'
+delay sidesteps it:
+
+```lua
+-- Hyprland (Lua config) — inside hl.on("hyprland.start", ...) in your autostart.lua
+hl.exec_cmd("sh -c 'sleep 5 && python /path/to/wallfliper/main.py --restore'")
+```
+```ini
+# Sway — ~/.config/sway/config
+exec sh -c 'sleep 5 && python /path/to/wallfliper/main.py --restore'
+```
+```kdl
+# niri — ~/.config/niri/config.kdl
+spawn-at-startup "sh" "-c" "sleep 5 && python /path/to/wallfliper/main.py --restore"
+```
+```ini
+# Wayfire — ~/.config/wayfire.ini
+[autostart]
+wallfliper = sh -c 'sleep 5 && python /path/to/wallfliper/main.py --restore'
+```
+
+> Uses **system `python`** (the same interpreter that runs the app) — no virtualenv,
+> no activation. Once you install via a package (e.g. AUR), a real `wallfliper` command
+> lands on PATH and every line above shortens to just `wallfliper --restore`.
+
+<details>
+<summary>Alternative: XDG autostart entry</summary>
+
+`wallfliper --install-autostart` writes `~/.config/autostart/wallfliper-restore.desktop`
+(the freedesktop standard). It works on sessions that **honor XDG autostart** — GNOME/KDE,
+or wlroots compositors launched via UWSM/systemd. A **bare Hyprland/Sway/niri session
+won't read that folder**, so on a plain setup use the compositor `exec` line above instead.
+</details>
 
 No background daemon of our own — rendering is handled by `swww-daemon` / `mpvpaper`.
 
