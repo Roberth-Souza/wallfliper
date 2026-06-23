@@ -1,0 +1,70 @@
+"""First-frame extraction for seamless video-wallpaper transitions.
+
+swww animates image->image switches; mpvpaper (video) has no transition of its
+own. To fake one when applying a video wallpaper, the backend swww-animates to a
+still of the video's opening frame, then brings mpvpaper up on top of that
+identical frame — the cut to live playback is invisible. This module produces
+(and caches) that still.
+
+It is deliberately separate from `thumbnails.py` (which writes a small `-ss 1`
+JPEG for the grid) and `integrations.py` (which writes a 320px `-ss 1` frame to
+theme from): both want a *representative* frame, this wants the *exact first*
+frame at full resolution so it lines up with what mpv renders pixel-for-pixel.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import shutil
+import subprocess
+from pathlib import Path
+
+from .state import cache_dir
+
+_FRAME_DIR_NAME = "firstframes"
+_EXTRACT_TIMEOUT_S = 30  # a stuck ffmpeg must not block the apply forever
+
+
+def first_frame(video: Path) -> Path | None:
+    """Return a PNG of `video`'s first frame, extracting and caching on first use.
+
+    Kept at the video's native resolution (no downscale) and as PNG (no second
+    lossy pass) so swww transitions to a still that matches mpv's frame 0 as
+    closely as possible. Cached under ~/.cache/wallfliper/firstframes/, keyed by
+    path+mtime+size so an edited file re-extracts. Returns None if ffmpeg is
+    missing or extraction fails — the caller falls back to a hard cut.
+    """
+    if not shutil.which("ffmpeg"):
+        return None
+    dest = _cache_path(video)
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp.png")  # atomic: never hand swww a partial file
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video),
+        "-frames:v", "1", "-update", "1", str(tmp),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=_EXTRACT_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        tmp.unlink(missing_ok=True)
+        return None
+    if result.returncode != 0 or not tmp.exists():
+        tmp.unlink(missing_ok=True)
+        return None
+    tmp.replace(dest)
+    return dest
+
+
+def _cache_path(video: Path) -> Path:
+    stat = video.stat()
+    key = f"{video.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    digest = hashlib.sha1(key.encode()).hexdigest()
+    return cache_dir() / _FRAME_DIR_NAME / f"{digest}.png"

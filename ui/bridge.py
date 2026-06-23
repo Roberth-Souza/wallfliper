@@ -172,15 +172,16 @@ class Controller(QObject):
         if entry is None:
             return
         try:
+            # Fixed random transition; fps follows the display refresh so the
+            # switch animation is as smooth as the monitor can show (a per-user
+            # transition picker may return later). Video reuses it for the
+            # seamless lead-in: swww animates to the clip's first frame, then
+            # mpvpaper takes over.
+            transition = ImageTransition(fps=self._transition_fps())
             if entry.kind == "video":
-                self._backend.set_video(entry.path)
+                self._backend.set_video(entry.path, transition)
             else:
-                # Fixed random transition; fps follows the display refresh so
-                # the switch animation is as smooth as the monitor can show
-                # (a per-user transition picker may return later).
-                self._backend.set_image(
-                    entry.path, ImageTransition(fps=self._transition_fps())
-                )
+                self._backend.set_image(entry.path, transition)
             save_state(entry.path, entry.kind)
             notify_color_tools(entry.path, entry.kind, self._config.color_hook)
             self._set_status(f"✓ applied {entry.name}")

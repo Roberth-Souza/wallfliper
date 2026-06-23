@@ -48,8 +48,15 @@ class WallpaperBackend(ABC):
         """
 
     @abstractmethod
-    def set_video(self, path: Path) -> None:
-        """Apply a looping video as the wallpaper across all outputs."""
+    def set_video(self, path: Path, transition: ImageTransition | None = None) -> None:
+        """Apply a looping video as the wallpaper across all outputs.
+
+        `transition` is the swww animation used for the seamless lead-in: the
+        switch animates to a still of the video's first frame, then the live
+        video takes over on top of it. None applies the video with a hard cut
+        (no still, no animation) — used on login restore, where there is no
+        prior frame to transition from.
+        """
 
     @abstractmethod
     def is_available(self) -> bool:
