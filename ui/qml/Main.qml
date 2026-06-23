@@ -84,12 +84,7 @@ Window {
             controller.apply(grid.currentIndex)
     }
 
-    // Enter: apply, then exit immediately. The swww transition runs in its own
-    // detached daemon (mpvpaper is detached too), so the wallpaper keeps
-    // animating on the revealed desktop after we're gone — quitting at once
-    // never cuts it short. Exiting immediately also frees the single-instance
-    // lock right away, so pressing the launch hotkey reopens wallfliper
-    // instantly instead of toggling a process that's still lingering.
+
     function applyAndExit() {
         if (grid.currentIndex < 0)
             return
