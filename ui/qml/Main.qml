@@ -84,7 +84,6 @@ Window {
             controller.apply(grid.currentIndex)
     }
 
-
     function applyAndExit() {
         if (grid.currentIndex < 0)
             return

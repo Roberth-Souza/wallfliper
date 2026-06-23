@@ -76,6 +76,7 @@ class WlrootsBackend(WallpaperBackend):
     def set_video(self, path: Path) -> None:
         mpvpaper = self._require("mpvpaper")
         old_pids = self._mpvpaper_pids()
+        # Already rendering this exact file → no-op, avoid stacking a 2nd GPU decoder.
         if len(old_pids) == 1 and self._video_path_of(old_pids[0]) == str(path):
             return
         # -p: auto-pause when hidden (the MVP fullscreen auto-pause).
