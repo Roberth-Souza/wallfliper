@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -68,15 +69,35 @@ def main(argv: list[str]) -> int:
     # seconds before the animation ends so its surface is mapped (frozen on
     # frame 0) by the time we unpause.
     time.sleep(max(0.0, cfg["duration"] - cfg["prewarm"]))
-    subprocess.Popen(
+    paused = subprocess.Popen(
         cfg["cmd"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-    _unpause(cfg["sock"], not_before=start + cfg["duration"])
+    if _unpause(cfg["sock"], not_before=start + cfg["duration"]):
+        return 0
+    # IPC never became reachable within the deadline: the paused mpvpaper would
+    # sit frozen on frame 0 forever. Kill it and relaunch a plain pause=no
+    # instance so a failed handoff degrades to a hard cut, not a dead wallpaper.
+    _recover_hard_cut(paused, cfg["fallback"])
     return 0
+
+
+def _recover_hard_cut(paused: subprocess.Popen, fallback_cmd: list[str]) -> None:
+    """Replace a stuck paused mpvpaper with a plain playing one."""
+    try:
+        os.killpg(paused.pid, signal.SIGKILL)  # pid is the session leader
+    except OSError:
+        pass  # already exited
+    subprocess.Popen(
+        fallback_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 if __name__ == "__main__":

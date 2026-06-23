@@ -163,7 +163,10 @@ class WlrootsBackend(WallpaperBackend):
         frame = first_frame(path)
         if frame is None:
             return False
-        self._ensure_daemon(swww)
+        try:
+            self._ensure_daemon(swww)
+        except BackendError:
+            return False  # daemon won't start → fall back to a plain hard cut
         # Dispatch the transition *before* retiring the old video. swww img returns
         # as soon as the daemon accepts the frame (it animates asynchronously), so
         # killing mpvpaper right after reveals a wipe that is already painting — no
@@ -184,6 +187,9 @@ class WlrootsBackend(WallpaperBackend):
         cfg = json.dumps(
             {
                 "cmd": self._mpvpaper_cmd(mpvpaper, path, ipc_socket=sock),
+                # Hard-cut command the driver falls back to if the IPC unpause
+                # never lands, so a failed handoff plays instead of freezing.
+                "fallback": self._mpvpaper_cmd(mpvpaper, path),
                 "sock": sock,
                 "duration": duration,
                 "prewarm": _MPV_PREWARM_S,
