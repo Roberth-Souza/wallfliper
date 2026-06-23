@@ -164,12 +164,20 @@ class WlrootsBackend(WallpaperBackend):
         if frame is None:
             return False
         self._ensure_daemon(swww)
-        if old_pids:
-            self._kill_pids(old_pids)  # reveal swww so its transition shows
-        self._run(
+        # Dispatch the transition *before* retiring the old video. swww img returns
+        # as soon as the daemon accepts the frame (it animates asynchronously), so
+        # killing mpvpaper right after reveals a wipe that is already painting — no
+        # blank-background flash on a video->video switch (swww's surface is stale
+        # there). If swww itself fails (daemon/compositor hiccup), bail so the
+        # caller falls back to a hard cut instead of dropping the current wallpaper
+        # onto a frame that never rendered.
+        if self._run(
             [swww, "img", *self._transition_args(transition), str(frame)],
             check=False,
-        )
+        ).returncode != 0:
+            return False
+        if old_pids:
+            self._kill_pids(old_pids)  # reveal swww so its transition shows
         instant = transition.type in ("none", "simple")
         duration = 0.0 if instant else transition.duration
         sock = self._ipc_socket_path()
