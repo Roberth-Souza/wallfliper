@@ -69,7 +69,7 @@ class FolderChooser(QObject):
             _REQUEST_IFACE,
             "Response",
             self,
-            _RESPONSE_SLOT,
+            _RESPONSE_SLOT,  # type: ignore[arg-type]  # stub says bytes; SLOT() str is required
         )
 
         options = {
@@ -114,7 +114,7 @@ class FolderChooser(QObject):
                 _REQUEST_IFACE,
                 "Response",
                 self,
-                _RESPONSE_SLOT,
+                _RESPONSE_SLOT,  # type: ignore[arg-type]  # stub says bytes; SLOT() str is required
             )
             self._request_path = None
         if path:
