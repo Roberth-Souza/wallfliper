@@ -98,32 +98,6 @@ def _prepend_system_qt_paths() -> None:
             os.environ[var] = path + (os.pathsep + existing if existing else "")
 
 
-def _prefer_portal_file_dialog() -> None:
-    """Route the folder picker through xdg-desktop-portal.
-
-    Qt's `FolderDialog` opens a native dialog via the platform theme. We force
-    the `xdgdesktopportal` theme (for our process only) so the picker goes to
-    the user's xdg-desktop-portal FileChooser backend instead of Qt's built-in
-    widget dialog. That means each user gets *their* configured chooser — a
-    graphical one (GTK/KDE), or a terminal file manager via
-    xdg-desktop-portal-termfilechooser (yazi/lf/ranger). Zero config, portable.
-
-    Guarded: only override when the portal theme plugin is actually present, so
-    systems without it keep Qt's working fallback dialog. Overrides an existing
-    value (e.g. qt6ct) because qt6ct otherwise intercepts dialogs and bypasses
-    the portal; this affects only wallfliper's process, not the user's global Qt.
-    """
-    import os
-
-    candidates = [_SYSTEM_QT_PLUGINS, *os.environ.get("QT_PLUGIN_PATH", "").split(os.pathsep)]
-    for plugins in candidates:
-        if plugins and os.path.exists(
-            os.path.join(plugins, "platformthemes", "libqxdgdesktopportal.so")
-        ):
-            os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
-            return
-
-
 def _install_signal_quit(app) -> tuple:
     """Quit the Qt loop on SIGTERM/SIGINT, event-driven (the self-pipe trick).
 
@@ -162,7 +136,6 @@ def _install_signal_quit(app) -> tuple:
 
 def _run_gui() -> int:
     _prepend_system_qt_paths()
-    _prefer_portal_file_dialog()
 
     # One live GUI only. If another instance is already up, acquire() signals it
     # to close (hotkey toggle) and returns False; we just exit without loading Qt.

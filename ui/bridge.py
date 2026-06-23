@@ -24,6 +24,7 @@ from core.backends import BackendError, MissingDependencyError, get_backend
 from core.backends.base import ImageTransition
 from core.integrations import notify_color_tools
 from core.library import scan
+from core.portal import FolderChooser
 from core.previews import PreviewLoader
 from core.state import Config, load_config, save_config, save_state
 from core.thumbnails import ThumbnailLoader
@@ -38,9 +39,13 @@ class Controller(QObject):
     wallpaperDirChanged = Signal()
     cornersChanged = Signal()
     backgroundOpacityChanged = Signal()
+    folderPickerClosed = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._folder_chooser = FolderChooser(self)
+        self._folder_chooser.picked.connect(self._on_folder_picked)
+        self._folder_chooser.cancelled.connect(self.folderPickerClosed)
         self._loader = ThumbnailLoader(_THUMB_SIZE, self)
         self._previews = PreviewLoader(self)
         self._model = WallpaperModel(self._loader, self._previews, self)
@@ -117,6 +122,21 @@ class Controller(QObject):
             self._set_status(f"⚠ {exc}")
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
+
+    @Slot()
+    def pickFolder(self) -> None:
+        """Open the user's portal file chooser to pick the wallpaper folder.
+
+        Goes straight to xdg-desktop-portal (see core/portal.py) so every user
+        gets their own configured chooser, instead of relying on Qt's
+        FolderDialog routing. QML hides the overlay before calling this and
+        restores it on `folderPickerClosed`.
+        """
+        self._folder_chooser.open()
+
+    def _on_folder_picked(self, path: str) -> None:
+        self.setFolder(path)
+        self.folderPickerClosed.emit()
 
     @Slot(str)
     def setFolder(self, folder: str) -> None:
