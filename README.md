@@ -120,6 +120,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `↑ ↓ ← →` · `h j k l` · `w a s d` | Move selection |
 | `/` | Start searching — then type to filter |
 | `Backspace` | Edit the filter (empty filter → leave search) |
+| `i` · `v` | Toggle the **image** / **video** filter (also clickable buttons) |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `Esc` | Close (or close the settings panel) |
