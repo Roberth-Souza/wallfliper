@@ -15,8 +15,10 @@ frame at full resolution so it lines up with what mpv renders pixel-for-pixel.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .state import cache_dir
@@ -40,7 +42,11 @@ def first_frame(video: Path) -> Path | None:
     if dest.exists():
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".tmp.png")  # atomic: never hand swww a partial file
+    # Unique tmp per call (atomic, and safe when the on-selection warm races the
+    # synchronous extraction at apply time — both could target the same dest).
+    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".ff-", suffix=".png")
+    os.close(fd)
+    tmp = Path(tmp_name)
     cmd = [
         "ffmpeg", "-y", "-i", str(video),
         "-frames:v", "1", "-update", "1", str(tmp),
@@ -56,10 +62,10 @@ def first_frame(video: Path) -> Path | None:
     except (subprocess.SubprocessError, OSError):
         tmp.unlink(missing_ok=True)
         return None
-    if result.returncode != 0 or not tmp.exists():
+    if result.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
         return None
-    tmp.replace(dest)
+    tmp.replace(dest)  # atomic; a concurrent extraction just lands the same bytes
     return dest
 
 

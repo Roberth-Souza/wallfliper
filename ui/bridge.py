@@ -14,8 +14,10 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QRunnable,
     QSize,
     QSortFilterProxyModel,
+    QThreadPool,
     Signal,
     Slot,
 )
@@ -23,6 +25,7 @@ from PySide6.QtGui import QGuiApplication
 
 from core.backends import BackendError, MissingDependencyError, get_backend
 from core.backends.base import ImageTransition
+from core.firstframe import first_frame
 from core.integrations import notify_color_tools
 from core.library import scan
 from core.portal import FolderChooser
@@ -75,6 +78,26 @@ class _WallpaperFilterProxy(QSortFilterProxyModel):
         return True
 
 
+class _FirstFrameWarmer(QRunnable):
+    """Pre-extract a video's first frame off the UI thread when it's selected.
+
+    The seamless video transition needs that still before swww can animate it;
+    if it isn't cached yet, the backend extracts it synchronously at apply time
+    (a brief UI-thread hitch). Warming it on selection makes apply a cache hit.
+    Fire-and-forget: the result lands in the disk cache, nothing here reads it.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+
+    def run(self) -> None:  # executed on a pool thread
+        try:
+            first_frame(self._path)
+        except Exception:  # warming is best-effort; never disturb the app
+            pass
+
+
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
@@ -101,6 +124,11 @@ class Controller(QObject):
         self._backend = get_backend()
         self._config: Config = load_config()
         self._status = ""
+        # One-at-a-time, low-priority warming of selected videos' first frames
+        # so the seamless transition finds them cached at apply time.
+        self._warm_pool = QThreadPool(self)
+        self._warm_pool.setMaxThreadCount(1)
+        self._warmed: set[str] = set()
         self.reload()
 
     # --- properties exposed to QML --------------------------------------
@@ -164,6 +192,18 @@ class Controller(QObject):
         """Generate the preview for a cell once it's selected (QML calls this)."""
         source = self._proxy.mapToSource(self._proxy.index(proxy_row, 0))
         self._model.request_preview(source)
+        self._warm_first_frame(source)
+
+    def _warm_first_frame(self, source: QModelIndex) -> None:
+        """Extract the selected video's first frame so apply is a cache hit."""
+        entry = self._model.entry_at(source)
+        if entry is None or entry.kind != "video":
+            return
+        key = str(entry.path)
+        if key in self._warmed:
+            return
+        self._warmed.add(key)
+        self._warm_pool.start(_FirstFrameWarmer(entry.path))
 
     @Slot(int)
     def apply(self, proxy_row: int) -> None:
@@ -237,6 +277,7 @@ class Controller(QObject):
         directory = self._config.wallpaper_path
         entries = scan(directory) if directory else []
         self._model.set_entries(entries)
+        self._warmed.clear()
         where = self._config.wallpaper_dir or "no folder set"
         self._set_status(f"{len(entries)} wallpapers · {where}")
 
