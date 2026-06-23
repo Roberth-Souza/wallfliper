@@ -12,6 +12,8 @@ triggered explicitly via `request_preview` when a cell becomes selected.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import (
     QAbstractListModel,
     QByteArray,
@@ -50,14 +52,26 @@ class WallpaperModel(QAbstractListModel):
         self._previews = preview_loader
         self._requested: set[str] = set()
         self._preview_requested: set[str] = set()
+        # path -> source row, so a worker's ready signal resolves its cell in O(1)
+        # instead of scanning every entry (was O(n) per thumbnail, O(n²) total).
+        self._row_by_path: dict[str, int] = {}
+        # Resolved disk-cache URIs, so data() never re-stat()s a known thumbnail/
+        # preview on the UI thread (GridView queries data() on every repaint).
+        self._thumb_uri: dict[str, str] = {}
+        self._preview_uri: dict[str, str] = {}
+        self._preview_checked: set[str] = set()
         self._loader.ready.connect(self._on_thumbnail_ready)
         self._previews.ready.connect(self._on_preview_ready)
 
     def set_entries(self, entries: list[WallpaperEntry]) -> None:
         self.beginResetModel()
         self._entries = entries
+        self._row_by_path = {str(e.path): row for row, e in enumerate(entries)}
         self._requested.clear()
         self._preview_requested.clear()
+        self._thumb_uri.clear()
+        self._preview_uri.clear()
+        self._preview_checked.clear()
         self.endResetModel()
 
     def entry_at(self, index: _Index) -> WallpaperEntry | None:
@@ -100,21 +114,28 @@ class WallpaperModel(QAbstractListModel):
     def _thumbnail(self, entry: WallpaperEntry) -> str:
         if not self._loader.supports(entry.kind):
             return ""
+        key = str(entry.path)
+        uri = self._thumb_uri.get(key)
+        if uri is not None:
+            return uri
+        if key in self._requested:
+            return ""  # generation in flight; wait for dataChanged, no stat
+        # First sighting of this entry: one disk check, then memoize the result.
         cached = self._loader.cache_path(entry)
         if cached.exists():
-            return cached.as_uri()
-        key = str(entry.path)
-        if key not in self._requested:
-            self._requested.add(key)
-            self._loader.request(entry)
+            self._thumb_uri[key] = cached.as_uri()
+            return self._thumb_uri[key]
+        self._requested.add(key)
+        self._loader.request(entry)
         return ""
 
     def _on_thumbnail_ready(self, path: str, _image) -> None:
-        for row, entry in enumerate(self._entries):
-            if str(entry.path) == path:
-                idx = self.index(row)
-                self.dataChanged.emit(idx, idx, [THUMBNAIL_ROLE])
-                break
+        row = self._row_by_path.get(path)
+        if row is None:
+            return
+        self._thumb_uri[path] = self._loader.cache_path(self._entries[row]).as_uri()
+        idx = self.index(row)
+        self.dataChanged.emit(idx, idx, [THUMBNAIL_ROLE])
 
     # --- previews -------------------------------------------------------
 
@@ -122,8 +143,19 @@ class WallpaperModel(QAbstractListModel):
         """Cached preview URI if ready, else "" (generation is not auto-fired)."""
         if not self._previews.supports(entry.kind):
             return ""
+        key = str(entry.path)
+        uri = self._preview_uri.get(key)
+        if uri is not None:
+            return uri
+        if key in self._preview_checked:
+            return ""  # disk already checked; wait for generation + dataChanged
+        # One disk check per entry; later generation arrives via _on_preview_ready.
+        self._preview_checked.add(key)
         cached = self._previews.cache_path(entry)
-        return cached.as_uri() if cached.exists() else ""
+        if cached.exists():
+            self._preview_uri[key] = cached.as_uri()
+            return self._preview_uri[key]
+        return ""
 
     def request_preview(self, index: QModelIndex) -> None:
         """Trigger preview generation for a cell (call when it becomes selected)."""
@@ -136,9 +168,10 @@ class WallpaperModel(QAbstractListModel):
         self._preview_requested.add(key)
         self._previews.request(entry)
 
-    def _on_preview_ready(self, path: str, _preview: str) -> None:
-        for row, entry in enumerate(self._entries):
-            if str(entry.path) == path:
-                idx = self.index(row)
-                self.dataChanged.emit(idx, idx, [PREVIEW_ROLE])
-                break
+    def _on_preview_ready(self, path: str, preview: str) -> None:
+        row = self._row_by_path.get(path)
+        if row is None:
+            return
+        self._preview_uri[path] = Path(preview).as_uri()
+        idx = self.index(row)
+        self.dataChanged.emit(idx, idx, [PREVIEW_ROLE])
