@@ -19,6 +19,7 @@ script via `python core/seamless.py <json-config>`, with no package context.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -47,6 +48,13 @@ def _unpause(sock: str, not_before: float) -> bool:
                 client.settimeout(_CONNECT_TIMEOUT_S)
                 client.connect(sock)
                 client.sendall(_UNPAUSE)
+            # mpv keeps its listening fd open, so unlinking the pathname now is
+            # safe and stops the per-launch sockets piling up when they land in
+            # the cache dir (under XDG_RUNTIME_DIR, a tmpfs, logout reaps them).
+            try:
+                os.unlink(sock)
+            except OSError:
+                pass
             return True
         except OSError:
             time.sleep(0.03)
