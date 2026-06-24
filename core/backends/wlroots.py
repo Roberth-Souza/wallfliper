@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from ..firstframe import first_frame
@@ -48,6 +49,21 @@ _RANDOM_TRANSITIONS = (
     "top",
     "bottom",
 )
+
+
+def _resolve_random(transition: ImageTransition) -> ImageTransition:
+    """Resolve a 'random' transition to a concrete type (fade excluded); others pass through.
+
+    Centralizes the pick so the swww `--transition-*` flags and the seamless
+    lead-in's timing read the *same* concrete type. Resolving 'random'
+    independently in each place could desync them — e.g. an instant type chosen
+    for the flags while the driver still waits the full duration to unpause,
+    leaving mpv frozen on frame 0 after the (instant) switch already finished.
+    """
+    if transition.type == "random":
+        return replace(transition, type=random.choice(_RANDOM_TRANSITIONS))
+    return transition
+
 
 # mpv options passed through to mpvpaper via -o. Tuned for robust, quiet, looping
 # playback. no-config isolates from the user's ~/.config/mpv: a custom mpv.conf
@@ -106,10 +122,8 @@ class WlrootsBackend(WallpaperBackend):
         """Translate a transition choice into swww `--transition-*` flags."""
         if transition is None:
             return []
-        ttype = transition.type
         # Resolve 'random' here (excluding fade) instead of letting swww pick.
-        if ttype == "random":
-            ttype = random.choice(_RANDOM_TRANSITIONS)
+        ttype = _resolve_random(transition).type
         args = ["--transition-type", ttype, "--transition-fps", str(transition.fps)]
         # swww ignores duration for the instant 'none'/'simple' switch.
         if ttype not in ("none", "simple"):
@@ -150,7 +164,8 @@ class WlrootsBackend(WallpaperBackend):
         switch on a still of the video's opening frame, then bring the live video
         up on top of that identical frame — the cut is invisible. Returns False
         (caller falls back to a hard cut) when the pieces aren't available: no
-        swww, or no ffmpeg to extract the still.
+        swww, or the first-frame still isn't cached yet (extraction is warmed
+        off-thread on selection; the apply path never blocks the GUI on ffmpeg).
 
         Any covering mpvpaper is dropped *now* so the swww animation is visible
         underneath it; a detached driver (core/seamless.py) then brings the video
@@ -160,13 +175,18 @@ class WlrootsBackend(WallpaperBackend):
         swww = self._resolve_optional(_SWWW_CANDIDATES)
         if swww is None:
             return False
-        frame = first_frame(path)
+        # cached_only: don't run ffmpeg on the GUI thread at apply. A not-yet-warmed
+        # clip degrades to a hard cut instead of freezing the overlay.
+        frame = first_frame(path, cached_only=True)
         if frame is None:
             return False
         try:
             self._ensure_daemon(swww)
         except BackendError:
             return False  # daemon won't start → fall back to a plain hard cut
+        # Resolve 'random' once so the swww flags below and the driver's unpause
+        # timing agree on the same concrete transition (see _resolve_random).
+        transition = _resolve_random(transition)
         # Dispatch the transition *before* retiring the old video. swww img returns
         # as soon as the daemon accepts the frame (it animates asynchronously), so
         # killing mpvpaper right after reveals a wipe that is already painting — no
@@ -205,8 +225,18 @@ class WlrootsBackend(WallpaperBackend):
     @staticmethod
     def _ipc_socket_path() -> str:
         """A fresh mpv IPC socket path (unique per launch, never stale)."""
-        base = os.environ.get("XDG_RUNTIME_DIR") or str(cache_dir())
-        return str(Path(base) / f"wallfliper-mpv-{time.monotonic_ns()}.sock")
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        base = Path(runtime) if runtime else cache_dir()
+        if runtime is None:
+            # XDG_RUNTIME_DIR is normally always set on a live Wayland session;
+            # the cache-dir fallback may not exist yet, and mpv won't create the
+            # socket's parent — without it the IPC handoff fails and the seamless
+            # transition silently degrades to a hard cut. Best-effort create.
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+        return str(base / f"wallfliper-mpv-{time.monotonic_ns()}.sock")
 
     @staticmethod
     def _mpvpaper_cmd(mpvpaper: str, path: Path, ipc_socket: str | None = None) -> list[str]:

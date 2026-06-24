@@ -27,7 +27,7 @@ _FRAME_DIR_NAME = "firstframes"
 _EXTRACT_TIMEOUT_S = 30  # a stuck ffmpeg must not block the apply forever
 
 
-def first_frame(video: Path) -> Path | None:
+def first_frame(video: Path, cached_only: bool = False) -> Path | None:
     """Return a PNG of `video`'s first frame, extracting and caching on first use.
 
     Kept at the video's native resolution (no downscale) and as PNG (no second
@@ -35,15 +35,22 @@ def first_frame(video: Path) -> Path | None:
     closely as possible. Cached under ~/.cache/wallfliper/firstframes/, keyed by
     path+mtime+size so an edited file re-extracts. Returns None if ffmpeg is
     missing or extraction fails — the caller falls back to a hard cut.
+
+    `cached_only` returns the still only if it is already cached, never
+    extracting. The apply path uses it so a not-yet-warmed clip degrades to a
+    hard cut instead of running ffmpeg synchronously on the GUI thread; the
+    off-thread warmer (selection) does the actual extraction.
     """
-    if not shutil.which("ffmpeg"):
-        return None
     try:
         dest = _cache_path(video)
     except OSError:
         return None  # file vanished between selection and apply → hard-cut fallback
     if dest.exists():
         return dest
+    if cached_only:
+        return None  # not warmed yet; caller hard-cuts rather than block on ffmpeg
+    if not shutil.which("ffmpeg"):
+        return None
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         # Unique tmp per call (atomic, and safe when the on-selection warm races
