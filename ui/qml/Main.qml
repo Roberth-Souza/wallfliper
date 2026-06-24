@@ -113,9 +113,19 @@ Window {
         win.searchText = ""
     }
 
+    // Lazy manual-entry fallback: shown only when no portal chooser answers.
+    property bool folderEntryOpen: false
+
     function openFolderPicker() {
-        win.visible = false
-        controller.pickFolder()
+        // With a portal, hide the overlay so the chooser toplevel is topmost and
+        // focused. Without one, never unmap — go straight to manual entry so the
+        // window can't be stranded hidden waiting on a chooser that won't appear.
+        if (controller.folderPortalAvailable()) {
+            win.visible = false
+            controller.pickFolder()
+        } else {
+            win.showFolderEntry()
+        }
     }
 
     // Re-map the overlay after the picker closes (chosen, cancelled, or failed).
@@ -125,9 +135,26 @@ Window {
             settingsLoader.item.forceActiveFocus()
     }
 
+    // Open manual path entry, ensuring the overlay is mapped (the portal route
+    // may have hidden it before failing).
+    function showFolderEntry() {
+        win.visible = true
+        win.folderEntryOpen = true
+    }
+
+    function closeFolderEntry() {
+        win.folderEntryOpen = false
+        if (settingsLoader.item)
+            settingsLoader.item.forceActiveFocus()
+        else
+            mainScope.forceActiveFocus()
+    }
+
     Connections {
         target: controller
         function onFolderPickerClosed() { win.closeFolderPicker() }
+        // Portal missing or the request failed: fall back to manual entry.
+        function onFolderManualRequested() { win.showFolderEntry() }
     }
 
     // A filter toggle (image / video). White line icon at full opacity +
@@ -457,5 +484,21 @@ Window {
             mainScope.forceActiveFocus()  // return key handling to the grid/search
         }
         function onFolderRequested() { win.openFolderPicker() }
+    }
+
+    // Manual folder entry, stacked above settings (z:100). Only instantiated
+    // while open, so it costs nothing otherwise. It self-focuses its input.
+    Loader {
+        id: folderEntryLoader
+        anchors.fill: parent
+        z: 200
+        active: win.folderEntryOpen
+        source: "FolderInput.qml"
+    }
+
+    Connections {
+        target: folderEntryLoader.item
+        function onAccepted() { win.closeFolderEntry() }
+        function onCancelled() { win.closeFolderEntry() }
     }
 }

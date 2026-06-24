@@ -6,6 +6,7 @@ logic stays in `core/`; this is the thin seam between the QML view and Python.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
@@ -28,7 +29,7 @@ from core.backends.base import ImageTransition
 from core.firstframe import first_frame
 from core.integrations import notify_color_tools
 from core.library import scan
-from core.portal import FolderChooser
+from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
 from core.state import Config, load_config, save_config, save_state
 from core.thumbnails import ThumbnailLoader
@@ -119,6 +120,7 @@ class Controller(QObject):
     cornersChanged = Signal()
     backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
+    folderManualRequested = Signal()
     imageFilterChanged = Signal()
     videoFilterChanged = Signal()
 
@@ -127,6 +129,7 @@ class Controller(QObject):
         self._folder_chooser = FolderChooser(self)
         self._folder_chooser.picked.connect(self._on_folder_picked)
         self._folder_chooser.cancelled.connect(self.folderPickerClosed)
+        self._folder_chooser.unavailable.connect(self.folderManualRequested)
         self._loader = ThumbnailLoader(_THUMB_SIZE, self)
         self._previews = PreviewLoader(self)
         self._model = WallpaperModel(self._loader, self._previews, self)
@@ -255,6 +258,16 @@ class Controller(QObject):
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
 
+    @Slot(result=bool)
+    def folderPortalAvailable(self) -> bool:
+        """Whether a FileChooser portal is reachable (see core/portal.py).
+
+        QML checks this before hiding the overlay: with no portal it goes
+        straight to the manual path-entry fallback instead of unmapping the
+        window for a chooser that never appears.
+        """
+        return portal_available()
+
     @Slot()
     def pickFolder(self) -> None:
         """Open the user's portal file chooser to pick the wallpaper folder.
@@ -262,13 +275,38 @@ class Controller(QObject):
         Goes straight to xdg-desktop-portal (see core/portal.py) so every user
         gets their own configured chooser, instead of relying on Qt's
         FolderDialog routing. QML hides the overlay before calling this and
-        restores it on `folderPickerClosed`.
+        restores it on `folderPickerClosed`. If no portal answers (or the call
+        fails), the chooser emits `unavailable`, surfaced here as
+        `folderManualRequested` so QML can fall back to manual entry.
         """
         self._folder_chooser.open()
 
     def _on_folder_picked(self, path: str) -> None:
         self.setFolder(path)
         self.folderPickerClosed.emit()
+
+    @Slot(str, result=str)
+    def setFolderFromText(self, text: str) -> str:
+        """Set the wallpaper folder from a hand-typed path (portal fallback).
+
+        Expands `~` and env vars, accepts a `file://` URI too, and validates the
+        target is a directory. Returns an empty string on success or a short,
+        lowercase error for the entry dialog to show inline.
+        """
+        text = text.strip()
+        if not text:
+            return "enter a path"
+        if text.startswith("file://"):
+            local = _to_local_path(text)
+        else:
+            local = os.path.expanduser(os.path.expandvars(text))
+        if not local:
+            return "invalid path"
+        path = Path(local)
+        if not path.is_dir():
+            return "not a folder"
+        self.setFolder(str(path))
+        return ""
 
     @Slot(str)
     def setFolder(self, folder: str) -> None:
