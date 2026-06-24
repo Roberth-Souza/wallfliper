@@ -14,8 +14,10 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QPersistentModelIndex,
+    QRunnable,
     QSize,
     QSortFilterProxyModel,
+    QThreadPool,
     Signal,
     Slot,
 )
@@ -23,6 +25,7 @@ from PySide6.QtGui import QGuiApplication
 
 from core.backends import BackendError, MissingDependencyError, get_backend
 from core.backends.base import ImageTransition
+from core.firstframe import first_frame
 from core.integrations import notify_color_tools
 from core.library import scan
 from core.portal import FolderChooser
@@ -75,6 +78,41 @@ class _WallpaperFilterProxy(QSortFilterProxyModel):
         return True
 
 
+class _WarmSignals(QObject):
+    """Carries a warmer's result back to the Controller's (main) thread.
+
+    QRunnable is not a QObject, so the signal lives here; a queued connection
+    hops the result off the pool thread onto the thread that owns the warm sets.
+    """
+
+    finished = Signal(str, bool)  # path key, whether the still is now cached
+
+
+class _FirstFrameWarmer(QRunnable):
+    """Pre-extract a video's first frame off the UI thread when it's selected.
+
+    The seamless video transition needs that still before swww can animate it.
+    The apply path only takes the seamless route when it is already cached
+    (otherwise it hard-cuts rather than block the GUI on ffmpeg), so warming on
+    selection is what makes the nice transition show up. `finished` reports
+    whether the still is now cached, so a failed warm is retried on re-select
+    instead of being marked done forever.
+    """
+
+    def __init__(self, path: Path, signals: _WarmSignals) -> None:
+        super().__init__()
+        self._path = path
+        self._signals = signals
+
+    def run(self) -> None:  # executed on a pool thread
+        ok = False
+        try:
+            ok = first_frame(self._path) is not None
+        except Exception:  # warming is best-effort; never disturb the app
+            ok = False
+        self._signals.finished.emit(str(self._path), ok)
+
+
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
@@ -101,6 +139,14 @@ class Controller(QObject):
         self._backend = get_backend()
         self._config: Config = load_config()
         self._status = ""
+        # One-at-a-time, low-priority warming of selected videos' first frames
+        # so the seamless transition finds them cached at apply time.
+        self._warm_pool = QThreadPool(self)
+        self._warm_pool.setMaxThreadCount(1)
+        self._warmed: set[str] = set()   # first frame confirmed cached
+        self._warming: set[str] = set()  # extraction currently in flight
+        self._warm_signals = _WarmSignals(self)
+        self._warm_signals.finished.connect(self._on_warm_finished)
         self.reload()
 
     # --- properties exposed to QML --------------------------------------
@@ -164,6 +210,25 @@ class Controller(QObject):
         """Generate the preview for a cell once it's selected (QML calls this)."""
         source = self._proxy.mapToSource(self._proxy.index(proxy_row, 0))
         self._model.request_preview(source)
+        self._warm_first_frame(source)
+
+    def _warm_first_frame(self, source: QModelIndex) -> None:
+        """Extract the selected video's first frame so apply is a cache hit."""
+        entry = self._model.entry_at(source)
+        if entry is None or entry.kind != "video":
+            return
+        key = str(entry.path)
+        if key in self._warmed or key in self._warming:
+            return
+        self._warming.add(key)
+        self._warm_pool.start(_FirstFrameWarmer(entry.path, self._warm_signals))
+
+    @Slot(str, bool)
+    def _on_warm_finished(self, key: str, ok: bool) -> None:
+        """Record a warmed first frame; drop a failed one so re-select retries it."""
+        self._warming.discard(key)
+        if ok:
+            self._warmed.add(key)
 
     @Slot(int)
     def apply(self, proxy_row: int) -> None:
@@ -172,15 +237,16 @@ class Controller(QObject):
         if entry is None:
             return
         try:
+            # Fixed random transition; fps follows the display refresh so the
+            # switch animation is as smooth as the monitor can show (a per-user
+            # transition picker may return later). Video reuses it for the
+            # seamless lead-in: swww animates to the clip's first frame, then
+            # mpvpaper takes over.
+            transition = ImageTransition(fps=self._transition_fps())
             if entry.kind == "video":
-                self._backend.set_video(entry.path)
+                self._backend.set_video(entry.path, transition)
             else:
-                # Fixed random transition; fps follows the display refresh so
-                # the switch animation is as smooth as the monitor can show
-                # (a per-user transition picker may return later).
-                self._backend.set_image(
-                    entry.path, ImageTransition(fps=self._transition_fps())
-                )
+                self._backend.set_image(entry.path, transition)
             save_state(entry.path, entry.kind)
             notify_color_tools(entry.path, entry.kind, self._config.color_hook)
             self._set_status(f"✓ applied {entry.name}")
@@ -236,6 +302,8 @@ class Controller(QObject):
         directory = self._config.wallpaper_path
         entries = scan(directory) if directory else []
         self._model.set_entries(entries)
+        self._warmed.clear()
+        self._warming.clear()
         where = self._config.wallpaper_dir or "no folder set"
         self._set_status(f"{len(entries)} wallpapers · {where}")
 
