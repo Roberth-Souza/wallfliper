@@ -78,24 +78,39 @@ class _WallpaperFilterProxy(QSortFilterProxyModel):
         return True
 
 
+class _WarmSignals(QObject):
+    """Carries a warmer's result back to the Controller's (main) thread.
+
+    QRunnable is not a QObject, so the signal lives here; a queued connection
+    hops the result off the pool thread onto the thread that owns the warm sets.
+    """
+
+    finished = Signal(str, bool)  # path key, whether the still is now cached
+
+
 class _FirstFrameWarmer(QRunnable):
     """Pre-extract a video's first frame off the UI thread when it's selected.
 
-    The seamless video transition needs that still before swww can animate it;
-    if it isn't cached yet, the backend extracts it synchronously at apply time
-    (a brief UI-thread hitch). Warming it on selection makes apply a cache hit.
-    Fire-and-forget: the result lands in the disk cache, nothing here reads it.
+    The seamless video transition needs that still before swww can animate it.
+    The apply path only takes the seamless route when it is already cached
+    (otherwise it hard-cuts rather than block the GUI on ffmpeg), so warming on
+    selection is what makes the nice transition show up. `finished` reports
+    whether the still is now cached, so a failed warm is retried on re-select
+    instead of being marked done forever.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, signals: _WarmSignals) -> None:
         super().__init__()
         self._path = path
+        self._signals = signals
 
     def run(self) -> None:  # executed on a pool thread
+        ok = False
         try:
-            first_frame(self._path)
+            ok = first_frame(self._path) is not None
         except Exception:  # warming is best-effort; never disturb the app
-            pass
+            ok = False
+        self._signals.finished.emit(str(self._path), ok)
 
 
 class Controller(QObject):
@@ -128,7 +143,10 @@ class Controller(QObject):
         # so the seamless transition finds them cached at apply time.
         self._warm_pool = QThreadPool(self)
         self._warm_pool.setMaxThreadCount(1)
-        self._warmed: set[str] = set()
+        self._warmed: set[str] = set()   # first frame confirmed cached
+        self._warming: set[str] = set()  # extraction currently in flight
+        self._warm_signals = _WarmSignals(self)
+        self._warm_signals.finished.connect(self._on_warm_finished)
         self.reload()
 
     # --- properties exposed to QML --------------------------------------
@@ -200,10 +218,17 @@ class Controller(QObject):
         if entry is None or entry.kind != "video":
             return
         key = str(entry.path)
-        if key in self._warmed:
+        if key in self._warmed or key in self._warming:
             return
-        self._warmed.add(key)
-        self._warm_pool.start(_FirstFrameWarmer(entry.path))
+        self._warming.add(key)
+        self._warm_pool.start(_FirstFrameWarmer(entry.path, self._warm_signals))
+
+    @Slot(str, bool)
+    def _on_warm_finished(self, key: str, ok: bool) -> None:
+        """Record a warmed first frame; drop a failed one so re-select retries it."""
+        self._warming.discard(key)
+        if ok:
+            self._warmed.add(key)
 
     @Slot(int)
     def apply(self, proxy_row: int) -> None:
@@ -278,6 +303,7 @@ class Controller(QObject):
         entries = scan(directory) if directory else []
         self._model.set_entries(entries)
         self._warmed.clear()
+        self._warming.clear()
         where = self._config.wallpaper_dir or "no folder set"
         self._set_status(f"{len(entries)} wallpapers · {where}")
 
