@@ -221,9 +221,11 @@ Window {
             else if (event.text === "/")
                 win.searching = true
             else if (event.text === "i")
-                controller.toggleImageFilter()
+                controller.setKindFilter("image")   // images only
             else if (event.text === "v")
-                controller.toggleVideoFilter()
+                controller.setKindFilter("video")   // videos only
+            else if (event.text === "e")
+                controller.setKindFilter("all")     // everything
             else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
                      || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
                 carousel.decrementCurrentIndex()

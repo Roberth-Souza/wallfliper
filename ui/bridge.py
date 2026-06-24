@@ -126,8 +126,7 @@ class Controller(QObject):
     backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
     folderManualRequested = Signal()
-    imageFilterChanged = Signal()
-    videoFilterChanged = Signal()
+    kindFilterChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -140,9 +139,9 @@ class Controller(QObject):
         self._model = WallpaperModel(self._loader, self._previews, self)
         self._proxy = _WallpaperFilterProxy(self)
         self._proxy.setSourceModel(self._model)
-        # Kind toggles: each is independent. None or both active = all kinds.
-        self._image_filter = False
-        self._video_filter = False
+        # Exclusive kind filter: "all" | "image" | "video". One mode at a time;
+        # each keybind sets its mode idempotently (no per-kind toggling).
+        self._kind_filter = "all"
 
         self._backend = get_backend()
         self._config: Config = load_config()
@@ -179,13 +178,10 @@ class Controller(QObject):
     def backgroundOpacity(self) -> float:
         return self._config.background_opacity
 
-    @Property(bool, notify=imageFilterChanged)
-    def imageFilter(self) -> bool:
-        return self._image_filter
-
-    @Property(bool, notify=videoFilterChanged)
-    def videoFilter(self) -> bool:
-        return self._video_filter
+    @Property(str, notify=kindFilterChanged)
+    def kindFilter(self) -> str:
+        """Active kind filter: "all", "image", or "video"."""
+        return self._kind_filter
 
     # --- slots called from QML ------------------------------------------
 
@@ -193,25 +189,16 @@ class Controller(QObject):
     def setFilter(self, text: str) -> None:
         self._proxy.set_text(text)
 
-    @Slot()
-    def toggleImageFilter(self) -> None:
-        self._image_filter = not self._image_filter
-        self.imageFilterChanged.emit()
-        self._apply_kind_filter()
-
-    @Slot()
-    def toggleVideoFilter(self) -> None:
-        self._video_filter = not self._video_filter
-        self.videoFilterChanged.emit()
-        self._apply_kind_filter()
-
-    def _apply_kind_filter(self) -> None:
-        kinds: set[str] = set()
-        if self._image_filter:
-            kinds.add("image")
-        if self._video_filter:
-            kinds.add("video")
-        self._proxy.set_kinds(frozenset(kinds))
+    @Slot(str)
+    def setKindFilter(self, kind: str) -> None:
+        """Show only `kind` ("image"/"video"), or "all". Idempotent: setting the
+        mode that's already active is a no-op (re-pressing the key does nothing).
+        """
+        if kind not in ("all", "image", "video") or kind == self._kind_filter:
+            return
+        self._kind_filter = kind
+        self._proxy.set_kinds(frozenset() if kind == "all" else frozenset({kind}))
+        self.kindFilterChanged.emit()
 
     @Slot(result=int)
     def appliedRow(self) -> int:
