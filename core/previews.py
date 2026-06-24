@@ -34,11 +34,14 @@ PreviewStrategy = Callable[[Path, Path], bool]
 _PREVIEW_DIR = cache_dir() / "previews"
 _MAX_WORKERS = 2  # encoding is heavier than thumbs; previews fire one at a time
 
-# Preview clip shape: short, low-res, modest framerate — enough to convey
-# motion while staying tiny and quick to encode.
+# Preview clip shape: short, modest framerate — enough to convey motion while
+# staying light to encode/decode (it's animated, so a big bump costs CPU per
+# frame, not just disk). The focused card is ~570px wide, so ~720px fills it at
+# 1x without the old upscale blur; raising this further mainly helps HiDPI.
 _START_SECONDS = "1"   # skip a possible black/fade-in opening frame
 _DURATION_SECONDS = "3"
-_PREVIEW_FILTER = "fps=15,scale=400:-2"
+_PREVIEW_WIDTH = 720
+_PREVIEW_FILTER = f"fps=15,scale={_PREVIEW_WIDTH}:-2"
 
 
 def _video_preview_strategy(src: Path, dest: Path) -> bool:
@@ -74,7 +77,9 @@ def _video_preview_strategy(src: Path, dest: Path) -> bool:
 
 def _cache_path(src: Path) -> Path:
     stat = src.stat()
-    key = f"{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    # Width is in the key so a resolution change re-encodes instead of serving a
+    # stale clip (mirrors the thumbnail cache keying on its target size).
+    key = f"{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{_PREVIEW_WIDTH}"
     digest = hashlib.sha1(key.encode()).hexdigest()
     return _PREVIEW_DIR / f"{digest}.webp"
 

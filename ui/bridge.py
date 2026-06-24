@@ -36,7 +36,12 @@ from core.thumbnails import ThumbnailLoader
 
 from .model import KIND_ROLE, NAME_ROLE, WallpaperModel
 
-_THUMB_SIZE = QSize(440, 248)
+# Fit-within box for cached card thumbnails. The carousel supersamples each card
+# (decodes at ~2x its on-screen height) for crispness, so the cache needs enough
+# pixels to feed that: a 1920px box (1920x1080 for 16:9, i.e. native for a 1080p
+# source — no upscaling). The on-screen Image still caps its own decode via
+# sourceSize, so this sets the disk-cache ceiling, not per-card RAM.
+_THUMB_SIZE = QSize(1920, 1920)
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -342,8 +347,8 @@ class Controller(QObject):
         self._model.set_entries(entries)
         self._warmed.clear()
         self._warming.clear()
-        where = self._config.wallpaper_dir or "no folder set"
-        self._set_status(f"{len(entries)} wallpapers · {where}")
+        # No count/folder chrome in the front; clear any stale apply message.
+        self._set_status("")
 
     def _set_status(self, text: str) -> None:
         self._status = text

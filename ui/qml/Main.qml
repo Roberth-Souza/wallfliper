@@ -53,8 +53,8 @@ Window {
     Rectangle {
         id: bg
         anchors.centerIn: parent
-        width: Math.min(1381, win.width - 80)
-        height: Math.min(743, win.height - 80)
+        width: Math.min(1340, win.width - 80)
+        height: Math.min(510, win.height - 80)
         color: Qt.rgba(7 / 255, 7 / 255, 8 / 255, controller.backgroundOpacity)
         radius: controller.corners === "sharp" ? 0 : 14
 
@@ -160,7 +160,7 @@ Window {
     FocusScope {
         id: mainScope
         anchors.fill: bg
-        anchors.margins: 16
+        anchors.margins: 8
         focus: true
 
         Keys.onPressed: (event) => {
@@ -233,34 +233,19 @@ Window {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 40
+            height: 26
 
-            Row {
+            // Settings gear — the only chrome up here, top-left.
+            Text {
+                text: "⚙"   // gear (only icon allowed — no word is shorter)
+                color: "#808080"
+                font.pixelSize: 18
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 22
-
-                Text {
-                    text: "⚙"   // gear (only icon allowed — no word is shorter)
-                    color: "#808080"
-                    font.pixelSize: 18
-                    anchors.verticalCenter: parent.verticalCenter
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: win.settingsOpen = true
-                    }
-                }
-
-                // Source label. Only the local library is implemented today;
-                // Wallhaven/Lively tabs return here once those backends exist
-                // (re-add as a Repeater over a sources model — see Roadmap).
-                Text {
-                    text: "Local"
-                    color: "#ffffff"
-                    font.pixelSize: 14
-                    font.underline: true
-                    anchors.verticalCenter: parent.verticalCenter
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: win.settingsOpen = true
                 }
             }
         }
@@ -275,18 +260,37 @@ Window {
             id: carousel
             anchors.left: parent.left
             anchors.right: parent.right
+            // Extra horizontal breathing room between the cards and the frame.
+            anchors.leftMargin: 22
+            anchors.rightMargin: 22
             anchors.verticalCenter: parent.verticalCenter
-            height: Math.min(parent.height - 120, 470)
+            height: Math.min(parent.height - 56, 420)
             clip: true
             orientation: ListView.Horizontal
             spacing: 18
+            // No drag/flick: movement is keyboard + wheel only, so the wheel
+            // can't fight the built-in flick and desync the centered selection.
+            interactive: false
 
             // Keep the focused card near the centre; the strip slides under it.
             highlightRangeMode: ListView.ApplyRange
             preferredHighlightBegin: Math.round(width / 2 - portraitW / 2)
             preferredHighlightEnd: Math.round(width / 2 + portraitW / 2)
             highlightMoveDuration: 220
-            cacheBuffer: 2000
+
+            // Mouse wheel over the strip steps through wallpapers (one per
+            // notch), re-centering on the new focus. Hover alone never moves it.
+            WheelHandler {
+                onWheel: (event) => {
+                    if (event.angleDelta.y < 0 || event.angleDelta.x < 0)
+                        carousel.incrementCurrentIndex()
+                    else if (event.angleDelta.y > 0 || event.angleDelta.x > 0)
+                        carousel.decrementCurrentIndex()
+                }
+            }
+            // Keep a small off-screen buffer so a few neighbours pre-decode
+            // without holding the whole library's bitmaps in RAM.
+            cacheBuffer: 700
 
             // Card geometry. Portrait by default; the focused card grows to
             // `expandedW`. These ratios and the settle delay are the only knobs.
@@ -294,6 +298,10 @@ Window {
             readonly property real portraitW: Math.round(cardH * 0.66)
             readonly property real expandedW: Math.round(cardH * 1.35)
             readonly property int expandDelay: 650   // ms focused before widening
+            // Decode the card thumbnail at 2x the card height (supersampled), so
+            // it stays sharp on any display density without leaning on a possibly
+            // under-reported devicePixelRatio. Bounded by the cache resolution.
+            readonly property int decodeH: Math.round(cardH * 2)
 
             model: controller.model
             currentIndex: 0
@@ -350,9 +358,11 @@ Window {
                         asynchronous: true
                         cache: true
                         // Portrait cards crop a landscape wallpaper to a centre
-                        // slice; the expanded card reveals the full width.
+                        // slice; the expanded card reveals the full width. Decode
+                        // by card height (the crop's constraining axis) so it's
+                        // sharp without over-decoding the cropped-away width.
                         fillMode: Image.PreserveAspectCrop
-                        sourceSize.width: carousel.expandedW
+                        sourceSize.height: carousel.decodeH
                     }
                     AnimatedImage {
                         anchors.fill: parent
@@ -377,11 +387,9 @@ Window {
 
                 MouseArea {
                     anchors.fill: parent
-                    hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    // Hover focuses the card (then it widens after the delay), so
-                    // the mouse drives the same audition the keyboard does.
-                    onEntered: carousel.currentIndex = cell.index
+                    // A single click focuses the card (never hover); double-click
+                    // applies and exits.
                     onClicked: {
                         carousel.currentIndex = cell.index
                         if (win.searching)
@@ -392,31 +400,20 @@ Window {
             }
         }
 
-        // ---- Bottom bar: status (left) + the minimal search, on the bottom ----
+        // ---- Bottom bar: the minimal search marker, bottom-left ----
         Item {
             id: bottomBar
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 24
+            height: 20
 
+            // Just a `/` at the bottom-left (mirrors the gear at top-left); it
+            // grows into `/<query>` as you type. No placeholder word, no box.
             Text {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                width: Math.max(0, parent.width / 2 - 120)
-                text: controller.status
-                color: "#5a5a5a"
-                font.pixelSize: 12
-                elide: Text.ElideRight
-            }
-
-            // Search affordance: a faint `/  search` hint that becomes the live
-            // `/<query>` once `/` is pressed. No box, no icon — the search "bar"
-            // is just this line, centered on the bottom edge.
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.verticalCenter: parent.verticalCenter
-                text: (win.searching || win.searchText !== "") ? "/" + win.searchText : "/  search"
+                text: "/" + win.searchText
                 // White while editing; grey when a filter persists after leaving
                 // search; faint when idle.
                 color: win.searching ? "#ffffff" : (win.searchText !== "" ? "#909090" : "#4a4a4a")
