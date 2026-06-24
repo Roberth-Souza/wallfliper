@@ -49,13 +49,6 @@ def _unpause(sock: str, not_before: float) -> bool:
                 client.settimeout(_CONNECT_TIMEOUT_S)
                 client.connect(sock)
                 client.sendall(_UNPAUSE)
-            # mpv keeps its listening fd open, so unlinking the pathname now is
-            # safe and stops the per-launch sockets piling up when they land in
-            # the cache dir (under XDG_RUNTIME_DIR, a tmpfs, logout reaps them).
-            try:
-                os.unlink(sock)
-            except OSError:
-                pass
             return True
         except OSError:
             time.sleep(0.03)
@@ -76,13 +69,23 @@ def main(argv: list[str]) -> int:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-    if _unpause(cfg["sock"], not_before=start + cfg["duration"]):
+    try:
+        if _unpause(cfg["sock"], not_before=start + cfg["duration"]):
+            return 0
+        # IPC never became reachable within the deadline: the paused mpvpaper
+        # would sit frozen on frame 0 forever. Kill it and relaunch a plain
+        # pause=no instance so a failed handoff degrades to a hard cut.
+        _recover_hard_cut(paused, cfg["fallback"])
         return 0
-    # IPC never became reachable within the deadline: the paused mpvpaper would
-    # sit frozen on frame 0 forever. Kill it and relaunch a plain pause=no
-    # instance so a failed handoff degrades to a hard cut, not a dead wallpaper.
-    _recover_hard_cut(paused, cfg["fallback"])
-    return 0
+    finally:
+        # Drop the socket pathname on every exit (success or fallback), not just
+        # success — mpv keeps its listening fd, so this only removes the dangling
+        # name and stops per-launch sockets from piling up. A cancelled driver is
+        # SIGKILLed before this runs; the backend unlinks that one instead.
+        try:
+            os.unlink(cfg["sock"])
+        except OSError:
+            pass
 
 
 def _recover_hard_cut(paused: subprocess.Popen, fallback_cmd: list[str]) -> None:

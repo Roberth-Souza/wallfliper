@@ -109,10 +109,12 @@ class WlrootsBackend(WallpaperBackend):
 
     def __init__(self) -> None:
         # The most recent seamless driver (core/seamless.py) that may still be
-        # pending. It brings its video up ~1s in the future, so a superseding
-        # apply has to cancel it (see _cancel_pending_transition) or the stale
-        # video maps on top of the newer wallpaper.
+        # pending, and the IPC socket it was handed. It brings its video up ~1s in
+        # the future, so a superseding apply has to cancel it (see
+        # _cancel_pending_transition) or the stale video maps on top of the newer
+        # wallpaper; the socket is unlinked there since a killed driver can't.
         self._pending_driver: subprocess.Popen | None = None
+        self._pending_sock: str | None = None
 
     def is_available(self) -> bool:
         return os.environ.get("WAYLAND_DISPLAY") is not None
@@ -243,6 +245,7 @@ class WlrootsBackend(WallpaperBackend):
         self._pending_driver = self._spawn_detached(
             [sys.executable, str(_SEAMLESS_DRIVER), cfg]
         )
+        self._pending_sock = sock
         return True
 
     def _cancel_pending_transition(self) -> None:
@@ -260,7 +263,9 @@ class WlrootsBackend(WallpaperBackend):
         reaps it separately via old_pids / _stop_video.
         """
         driver = self._pending_driver
+        sock = self._pending_sock
         self._pending_driver = None
+        self._pending_sock = None
         if driver is None:
             return
         try:
@@ -271,6 +276,11 @@ class WlrootsBackend(WallpaperBackend):
             driver.wait(timeout=1.0)  # reap it so cancelled drivers don't pile up as zombies
         except subprocess.TimeoutExpired:
             pass  # SIGKILL is near-instant; never block apply on a stuck reap
+        if sock is not None:
+            # The driver was killed before its own socket cleanup, so do it here —
+            # otherwise every superseded transition leaks an IPC socket. Safe even
+            # if mpv came up: it keeps its listening fd, only the pathname goes.
+            Path(sock).unlink(missing_ok=True)
 
     @staticmethod
     def _ipc_socket_path() -> str:
