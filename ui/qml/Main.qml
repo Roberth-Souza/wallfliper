@@ -83,20 +83,20 @@ Window {
     property bool searching: false
     onSearchTextChanged: {
         controller.setFilter(searchText)
-        grid.currentIndex = grid.count > 0 ? 0 : -1
+        carousel.currentIndex = carousel.count > 0 ? 0 : -1
     }
 
     // Space: apply but keep the overlay open, so you can audition wallpapers
     // live on the real desktop and keep browsing.
     function applyCurrent() {
-        if (grid.currentIndex >= 0)
-            controller.apply(grid.currentIndex)
+        if (carousel.currentIndex >= 0)
+            controller.apply(carousel.currentIndex)
     }
 
     function applyAndExit() {
-        if (grid.currentIndex < 0)
+        if (carousel.currentIndex < 0)
             return
-        controller.apply(grid.currentIndex)
+        controller.apply(carousel.currentIndex)
         Qt.quit()
     }
 
@@ -157,42 +157,6 @@ Window {
         function onFolderManualRequested() { win.showFolderEntry() }
     }
 
-    // A filter toggle (image / video). White line icon at full opacity +
-    // white outline when active; dimmed to grey when off — the same
-    // white-selection language as the grid. Corners follow the global corner
-    // setting. The icon is a monochrome SVG from assets/icons (white stroke),
-    // greyed for the off state by lowering opacity over the dark backdrop.
-    component FilterButton: Rectangle {
-        id: fbtn
-        property url icon
-        property bool active: false
-        signal toggled()
-
-        width: 28
-        height: 22
-        radius: controller.corners === "sharp" ? 0 : 6
-        color: "transparent"
-        border.color: fbtn.active ? "#ffffff" : "#4a4a4a"
-        border.width: fbtn.active ? 2 : 1
-
-        Image {
-            anchors.centerIn: parent
-            source: fbtn.icon
-            // Rasterize the SVG at 2x the display size for a crisp edge on HiDPI.
-            sourceSize.width: 28
-            sourceSize.height: 28
-            width: 14
-            height: 14
-            smooth: true
-            opacity: fbtn.active ? 1.0 : 0.5
-        }
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: fbtn.toggled()
-        }
-    }
-
     FocusScope {
         id: mainScope
         anchors.fill: bg
@@ -218,18 +182,12 @@ Window {
                 // confirms without moving; `/` again cancels it.
                 if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                     win.exitSearchKeep()
-                else if (event.key === Qt.Key_Up) {
+                else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left) {
                     win.exitSearchKeep()
-                    grid.moveCurrentIndexUp()
-                } else if (event.key === Qt.Key_Down) {
+                    carousel.decrementCurrentIndex()
+                } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Right) {
                     win.exitSearchKeep()
-                    grid.moveCurrentIndexDown()
-                } else if (event.key === Qt.Key_Left) {
-                    win.exitSearchKeep()
-                    grid.moveCurrentIndexLeft()
-                } else if (event.key === Qt.Key_Right) {
-                    win.exitSearchKeep()
-                    grid.moveCurrentIndexRight()
+                    carousel.incrementCurrentIndex()
                 } else if (event.text === "/")
                     win.exitSearchClear()  // press `/` again to leave and clear
                 else if (event.key === Qt.Key_Backspace) {
@@ -258,14 +216,12 @@ Window {
                 controller.toggleImageFilter()
             else if (event.text === "v")
                 controller.toggleVideoFilter()
-            else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K)
-                grid.moveCurrentIndexUp()
-            else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J)
-                grid.moveCurrentIndexDown()
-            else if (event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
-                grid.moveCurrentIndexLeft()
-            else if (event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
-                grid.moveCurrentIndexRight()
+            else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
+                     || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
+                carousel.decrementCurrentIndex()
+            else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J
+                     || event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
+                carousel.incrementCurrentIndex()
             else
                 return
             event.accepted = true
@@ -307,58 +263,38 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
-
-            // Search affordance: a faint `/  search` hint in normal mode that
-            // becomes the live `/<query>` once you press `/`. No box, no icon.
-            Text {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                text: (win.searching || win.searchText !== "") ? "/" + win.searchText : "/  search"
-                // White while editing; grey when a filter persists after leaving
-                // search (so the active filter is never hidden); faint when idle.
-                color: win.searching ? "#ffffff" : (win.searchText !== "" ? "#909090" : "#4a4a4a")
-                font.pixelSize: 14
-            }
         }
 
-        // ---- Filter toggles: image / video, below the search hint ----
-        Row {
-            id: filterBar
-            anchors.top: topBar.bottom
-            anchors.topMargin: 8
-            anchors.right: parent.right
-            spacing: 8
-
-            FilterButton {
-                icon: "../../assets/icons/image.svg"
-                active: controller.imageFilter
-                onToggled: controller.toggleImageFilter()
-            }
-            FilterButton {
-                icon: "../../assets/icons/video.svg"
-                active: controller.videoFilter
-                onToggled: controller.toggleVideoFilter()
-            }
-        }
-
-        // ---- Grid ----
-        GridView {
-            id: grid
-            anchors.top: filterBar.bottom
-            anchors.topMargin: 12
+        // ---- Carousel: a horizontal strip of portrait wallcards ----
+        // The wallpapers are the content; chrome recedes. Cards are portrait so
+        // a handful read at once; the focused card widens to a landscape card
+        // (after a short settle delay) so its wallpaper — almost always 16:9 —
+        // is legible. Centered in the free vertical band between the top bar and
+        // the bottom search; height-capped so a few cards fit across, not a wall.
+        ListView {
+            id: carousel
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.bottom: statusBar.top
-            anchors.bottomMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            height: Math.min(parent.height - 120, 470)
             clip: true
-            // Responsive columns: pick as many ~232px cells as fit, then divide
-            // the full width evenly among them so no empty space is left on the
-            // right. Cell height keeps the original 232:176 proportion.
-            readonly property int minCell: 232
-            readonly property int columns: Math.max(1, Math.floor(width / minCell))
-            cellWidth: width / columns
-            cellHeight: cellWidth * (176 / 232)
-            cacheBuffer: 600
+            orientation: ListView.Horizontal
+            spacing: 18
+
+            // Keep the focused card near the centre; the strip slides under it.
+            highlightRangeMode: ListView.ApplyRange
+            preferredHighlightBegin: Math.round(width / 2 - portraitW / 2)
+            preferredHighlightEnd: Math.round(width / 2 + portraitW / 2)
+            highlightMoveDuration: 220
+            cacheBuffer: 2000
+
+            // Card geometry. Portrait by default; the focused card grows to
+            // `expandedW`. These ratios and the settle delay are the only knobs.
+            readonly property real cardH: height
+            readonly property real portraitW: Math.round(cardH * 0.66)
+            readonly property real expandedW: Math.round(cardH * 1.35)
+            readonly property int expandDelay: 650   // ms focused before widening
+
             model: controller.model
             currentIndex: 0
 
@@ -369,99 +305,123 @@ Window {
                 required property string kind
                 required property string thumbnail
                 required property string preview
-                width: grid.cellWidth
-                height: grid.cellHeight
-                property bool selected: GridView.isCurrentItem
+                property bool selected: ListView.isCurrentItem
+                property bool expanded: false
 
-                // Thumb fills the cell minus padding; caption sits below.
-                readonly property real thumbW: width - 20
-                readonly property real thumbH: thumbW * (120 / 212)
+                height: carousel.cardH
+                width: expanded ? carousel.expandedW : carousel.portraitW
+                Behavior on width { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
 
-                // A video preview plays only on the selected cell. Ask the
-                // controller to generate it lazily the moment we're selected
-                // (cached after the first time); at most one cell previews.
-                readonly property bool previewing: selected && kind === "video" && preview !== ""
-                onSelectedChanged: if (selected && kind === "video") controller.ensurePreview(index)
-                Component.onCompleted: if (selected && kind === "video") controller.ensurePreview(index)
-
-                Column {
-                    anchors.centerIn: parent
-                    spacing: 6
-
-                    Rectangle {
-                        width: cell.thumbW
-                        height: cell.thumbH
-                        radius: controller.corners === "sharp" ? 0 : 8
-                        color: "#161616"
-                        border.color: cell.selected ? "#ffffff" : "transparent"
-                        border.width: 2
-                        clip: true
-
-                        Image {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            source: cell.thumbnail
-                            visible: cell.thumbnail !== "" && !cell.previewing
-                            asynchronous: true
-                            cache: true
-                            fillMode: Image.PreserveAspectCrop
-                            sourceSize.width: 424
-                        }
-                        AnimatedImage {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            // Only load the clip while selected so unselected
-                            // cells hold no decoder/memory.
-                            source: cell.previewing ? cell.preview : ""
-                            visible: cell.previewing
-                            playing: cell.previewing
-                            cache: false
-                            asynchronous: true
-                            fillMode: Image.PreserveAspectCrop
-                        }
-                        Text {
-                            anchors.centerIn: parent
-                            visible: cell.thumbnail === "" && !cell.previewing
-                            text: cell.kind === "video" ? "▶" : "…"
-                            color: "#3a3a3a"
-                            font.pixelSize: 22
-                        }
+                // The outline lands instantly on focus (immediate feedback); the
+                // widening waits out `expandDelay` so scrubbing fast through cards
+                // doesn't thrash. Collapse is instant when focus leaves.
+                Timer { id: expandTimer; interval: carousel.expandDelay; onTriggered: cell.expanded = true }
+                onSelectedChanged: {
+                    if (selected) {
+                        if (kind === "video") controller.ensurePreview(index)
+                        expandTimer.restart()
+                    } else {
+                        expandTimer.stop()
+                        cell.expanded = false
                     }
+                }
+                Component.onCompleted: if (selected) {
+                    if (kind === "video") controller.ensurePreview(index)
+                    expandTimer.restart()
+                }
 
+                // A video preview plays only on the focused cell; generated
+                // lazily (cached after the first time); at most one cell previews.
+                readonly property bool previewing: selected && kind === "video" && preview !== ""
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: controller.corners === "sharp" ? 0 : 10
+                    color: "#161616"
+                    border.color: cell.selected ? "#ffffff" : "transparent"
+                    border.width: 2
+                    clip: true
+
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        source: cell.thumbnail
+                        visible: cell.thumbnail !== "" && !cell.previewing
+                        asynchronous: true
+                        cache: true
+                        // Portrait cards crop a landscape wallpaper to a centre
+                        // slice; the expanded card reveals the full width.
+                        fillMode: Image.PreserveAspectCrop
+                        sourceSize.width: carousel.expandedW
+                    }
+                    AnimatedImage {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        // Only load the clip while focused so unfocused cells hold
+                        // no decoder/memory.
+                        source: cell.previewing ? cell.preview : ""
+                        visible: cell.previewing
+                        playing: cell.previewing
+                        cache: false
+                        asynchronous: true
+                        fillMode: Image.PreserveAspectCrop
+                    }
                     Text {
-                        width: cell.thumbW
-                        text: cell.name
-                        color: cell.selected ? "#ffffff" : "#909090"
-                        elide: Text.ElideMiddle
-                        horizontalAlignment: Text.AlignHCenter
-                        font.pixelSize: 12
+                        anchors.centerIn: parent
+                        visible: cell.thumbnail === "" && !cell.previewing
+                        text: cell.kind === "video" ? "▶" : "…"
+                        color: "#3a3a3a"
+                        font.pixelSize: 24
                     }
                 }
 
                 MouseArea {
                     anchors.fill: parent
-                    // Clicking a result selects it and leaves search mode, but
-                    // keeps the query/filter so the selection stays valid.
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // Hover focuses the card (then it widens after the delay), so
+                    // the mouse drives the same audition the keyboard does.
+                    onEntered: carousel.currentIndex = cell.index
                     onClicked: {
-                        grid.currentIndex = cell.index
+                        carousel.currentIndex = cell.index
                         if (win.searching)
                             win.exitSearchKeep()
                     }
-                    onDoubleClicked: { grid.currentIndex = cell.index; win.applyAndExit() }
+                    onDoubleClicked: { carousel.currentIndex = cell.index; win.applyAndExit() }
                 }
             }
         }
 
-        // ---- Status ----
-        Text {
-            id: statusBar
+        // ---- Bottom bar: status (left) + the minimal search, on the bottom ----
+        Item {
+            id: bottomBar
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-            text: controller.status
-            color: "#777777"
-            font.pixelSize: 12
-            elide: Text.ElideRight
+            height: 24
+
+            Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(0, parent.width / 2 - 120)
+                text: controller.status
+                color: "#5a5a5a"
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+
+            // Search affordance: a faint `/  search` hint that becomes the live
+            // `/<query>` once `/` is pressed. No box, no icon — the search "bar"
+            // is just this line, centered on the bottom edge.
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.verticalCenter: parent.verticalCenter
+                text: (win.searching || win.searchText !== "") ? "/" + win.searchText : "/  search"
+                // White while editing; grey when a filter persists after leaving
+                // search; faint when idle.
+                color: win.searching ? "#ffffff" : (win.searchText !== "" ? "#909090" : "#4a4a4a")
+                font.pixelSize: 14
+            }
         }
     }
 
