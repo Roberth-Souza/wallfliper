@@ -32,6 +32,14 @@ Window {
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityExclusive
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
 
+    // The layer surface holds the keyboard grab from the moment it maps, but Qt
+    // doesn't always flip the window to "active" until the first pointer/key
+    // event — so key events aren't routed to the focus scope and the user has to
+    // click first. Nudge activation on map, and (re)grab focus to the main scope
+    // whenever the window becomes active.
+    Component.onCompleted: win.requestActivate()
+    onActiveChanged: if (active) mainScope.forceActiveFocus()
+
     // Click-away-to-close: a full-screen catcher behind the card. The surface is
     // full-screen but transparent here, so the desktop shows through (and
     // `layerrule = ignorezero` keeps blur off it); clicking anywhere outside the
