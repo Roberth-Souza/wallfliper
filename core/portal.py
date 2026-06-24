@@ -22,6 +22,7 @@ _REQUEST_IFACE = "org.freedesktop.portal.Request"
 
 # Request.Response codes (portal spec): 0 success, 1 user cancelled, 2 other.
 _RESPONSE_SUCCESS = 0
+_RESPONSE_USER_CANCELLED = 1
 
 # SLOT signature for the Request.Response signal (u response, a{sv} results).
 # QtDBus' Python binding takes the old-style SLOT() string here, not a callable.
@@ -31,13 +32,17 @@ _RESPONSE_SLOT = SLOT("_on_response(uint,QVariantMap)")
 class FolderChooser(QObject):
     """Opens the user's portal file chooser to pick one directory.
 
-    Emits `picked(path)` with a local filesystem path on success, or
-    `cancelled()` if the user dismisses it or the portal is unavailable. Exactly
-    one of the two always fires, so callers can rely on it to restore UI state.
+    Emits exactly one terminal signal per `open()`, so callers can rely on it to
+    restore UI state:
+      - `picked(path)` — a local filesystem path was chosen;
+      - `cancelled()`  — the user dismissed the chooser;
+      - `unavailable()`— no FileChooser portal answered (e.g. xdg-desktop-portal
+        not installed) or the request failed, so a fallback should take over.
     """
 
     picked = Signal(str)
     cancelled = Signal()
+    unavailable = Signal()
 
     _tokens = count()
 
@@ -54,7 +59,7 @@ class FolderChooser(QObject):
             return
         bus = QDBusConnection.sessionBus()
         if not bus.isConnected():
-            self.cancelled.emit()
+            self.unavailable.emit()
             return
         self._busy = True
 
@@ -92,18 +97,25 @@ class FolderChooser(QObject):
         """
         watcher.deleteLater()
         if watcher.reply().type() == QDBusMessage.MessageType.ErrorMessage:
-            self._finish(None)
+            # The call itself errored (no FileChooser backend answered the bus
+            # name); the Response signal will never arrive, so settle here.
+            self._settle("unavailable")
 
     @Slot("uint", "QVariantMap")
     def _on_response(self, code: int, results: dict) -> None:
-        path = None
         if code == _RESPONSE_SUCCESS:
             uris = results.get("uris") or []
-            if uris:
-                path = _uri_to_path(uris[0])
-        self._finish(path)
+            path = _uri_to_path(uris[0]) if uris else None
+            self._settle("picked" if path else "cancelled", path)
+        elif code == _RESPONSE_USER_CANCELLED:
+            self._settle("cancelled")
+        else:
+            # Code 2 ("other"): the portal ended the request without a result,
+            # e.g. no usable backend — treat as unavailable so a fallback runs.
+            self._settle("unavailable")
 
-    def _finish(self, path: str | None) -> None:
+    def _settle(self, outcome: str, path: str | None = None) -> None:
+        """End the current request exactly once, emitting one terminal signal."""
         if not self._busy:
             return
         self._busy = False
@@ -117,10 +129,41 @@ class FolderChooser(QObject):
                 _RESPONSE_SLOT,  # type: ignore[arg-type]  # stub says bytes; SLOT() str is required
             )
             self._request_path = None
-        if path:
+        if outcome == "picked" and path:
             self.picked.emit(path)
+        elif outcome == "unavailable":
+            self.unavailable.emit()
         else:
             self.cancelled.emit()
+
+
+def portal_available() -> bool:
+    """Whether the FileChooser portal can be reached on the session bus.
+
+    True if `org.freedesktop.portal.Desktop` is already running or is
+    D-Bus-activatable. Lets the caller skip hiding its window for a chooser that
+    will never appear (e.g. xdg-desktop-portal not installed) and go straight to
+    a fallback. Deliberately conservative: any uncertainty returns True so the
+    async `open()` path — which settles `unavailable` on a failed call — stays
+    the real arbiter rather than this pre-check wrongly masking a working chooser.
+    """
+    bus = QDBusConnection.sessionBus()
+    if not bus.isConnected():
+        return False
+    iface = bus.interface()
+    if iface is None:
+        return True
+    try:
+        if iface.isServiceRegistered(_PORTAL_SERVICE).value():
+            return True
+    except Exception:
+        return True
+    try:
+        reply = iface.call("ListActivatableNames")
+        args = reply.arguments()
+        return _PORTAL_SERVICE in (args[0] if args else [])
+    except Exception:
+        return True
 
 
 def _uri_to_path(uri: str) -> str | None:
