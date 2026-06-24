@@ -45,6 +45,10 @@ Wallfliper draws its picker as a `wlr-layer-shell` overlay and delegates paintin
 
 Out of scope (no layer-shell, or only partial): KDE Plasma, GNOME, X11, Windows.
 
+## 🙃 Why this exists
+
+Honestly? I just wanted to give Claude Code a try , and ended up enjoying it a little too much.
+
 ## 📦 Installation
 
 Install from source — works on any supported compositor:
