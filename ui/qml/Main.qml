@@ -54,17 +54,15 @@ Window {
     // Backdrop (the visible panel), centered as a card so there's always a
     // transparent margin to click away on. Capped to the design size, shrinking
     // to fit smaller screens. Alpha < 1 is what blur shows through; without blur
-    // it's just a translucent dark panel. Opacity and corner style are user
-    // settings (see Settings.qml), persisted in config.json. Rounded corners
-    // need `layerrule = ignorezero, wallfliper` so blur skips the transparent
-    // edges. Base is near-black (#070708); only the alpha varies.
+    // it's just a translucent dark panel. Opacity is a user setting (see
+    // Settings.qml), persisted in config.json. Base is near-black (#070708);
+    // only the alpha varies. Sharp corners throughout, per DESIGN.md.
     Rectangle {
         id: bg
         anchors.centerIn: parent
         width: Math.min(1340, win.width - 80)
         height: Math.min(510, win.height - 80)
         color: Qt.rgba(7 / 255, 7 / 255, 8 / 255, controller.backgroundOpacity)
-        radius: controller.corners === "sharp" ? 0 : 14
 
         // Swallow clicks on the panel so they don't fall through to dismissArea;
         // only clicks on the transparent margin outside the card close the app.

@@ -122,7 +122,6 @@ class _FirstFrameWarmer(QRunnable):
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
-    cornersChanged = Signal()
     backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
     folderManualRequested = Signal()
@@ -169,10 +168,6 @@ class Controller(QObject):
     @Property(str, notify=wallpaperDirChanged)
     def wallpaperDir(self) -> str:
         return self._config.wallpaper_dir or ""
-
-    @Property(str, notify=cornersChanged)
-    def corners(self) -> str:
-        return self._config.corners
 
     @Property(float, notify=backgroundOpacityChanged)
     def backgroundOpacity(self) -> float:
@@ -325,14 +320,6 @@ class Controller(QObject):
             save_config(self._config)
             self.wallpaperDirChanged.emit()
             self.reload()
-
-    @Slot(str)
-    def setCorners(self, corners: str) -> None:
-        if corners not in ("round", "sharp") or corners == self._config.corners:
-            return
-        self._config.corners = corners  # type: ignore[assignment]
-        save_config(self._config)
-        self.cornersChanged.emit()
 
     @Slot(float)
     def setBackgroundOpacity(self, opacity: float) -> None:

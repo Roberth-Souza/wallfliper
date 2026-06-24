@@ -52,7 +52,6 @@ FocusScope {
         anchors.centerIn: parent
         width: 560
         height: col.implicitHeight + 40
-        radius: controller.corners === "sharp" ? 0 : 12
         color: "#141417"
         border.color: entry.cLine
         border.width: 1
@@ -85,7 +84,6 @@ FocusScope {
             Rectangle {
                 width: col.width
                 height: 32
-                radius: controller.corners === "sharp" ? 0 : 6
                 color: "#0e0e10"
                 border.color: input.activeFocus ? entry.cWhite : entry.cLine
                 border.width: 1

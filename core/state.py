@@ -16,13 +16,12 @@ from pathlib import Path
 from typing import Literal
 
 WallpaperKind = Literal["image", "video"]
-Corners = Literal["round", "sharp"]
 
 _APP = "wallfliper"
 
 # Persisted settings keys read back in load_config (kept in one place so the
 # loader and the dataclass can't drift).
-_CONFIG_KEYS = ("wallpaper_dir", "color_hook", "corners", "background_opacity")
+_CONFIG_KEYS = ("wallpaper_dir", "color_hook", "background_opacity")
 
 
 def config_dir() -> Path:
@@ -57,10 +56,9 @@ class Config:
     # wallpaper path. Empty = auto: notify noctalia-shell if it's running
     # (it derives its color scheme from the wallpaper but doesn't watch swww).
     color_hook: str = ""
-    # UI customization (Hyprland ricing). "round" | "sharp" corner style and the
-    # backdrop opacity (0..1 alpha of the near-black panel; lower = more
-    # see-through for a `layerrule = blur` compositor).
-    corners: Corners = "round"
+    # UI customization (Hyprland ricing). Backdrop opacity (0..1 alpha of the
+    # near-black panel; lower = more see-through for a `layerrule = blur`
+    # compositor).
     background_opacity: float = 0.9
 
     @property
