@@ -79,6 +79,10 @@ class WallpaperModel(QAbstractListModel):
             return None
         return self._entries[index.row()]
 
+    def row_for_path(self, path: str) -> int:
+        """Source row of the entry with this path, or -1 if it isn't loaded."""
+        return self._row_by_path.get(path, -1)
+
     # --- QAbstractListModel ---------------------------------------------
 
     def roleNames(self) -> dict:

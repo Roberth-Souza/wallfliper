@@ -31,7 +31,7 @@ from core.integrations import notify_color_tools
 from core.library import scan
 from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
-from core.state import Config, load_config, save_config, save_state
+from core.state import Config, load_config, load_state, save_config, save_state
 from core.thumbnails import ThumbnailLoader
 
 from .model import KIND_ROLE, NAME_ROLE, WallpaperModel
@@ -212,6 +212,23 @@ class Controller(QObject):
         if self._video_filter:
             kinds.add("video")
         self._proxy.set_kinds(frozenset(kinds))
+
+    @Slot(result=int)
+    def appliedRow(self) -> int:
+        """Proxy row of the currently-applied wallpaper, or 0 if none/missing.
+
+        Lets the carousel open centred on what's already on the desktop instead
+        of the first card. Falls back to row 0 when there is no saved state or
+        the file is no longer in the library (e.g. the folder changed).
+        """
+        state = load_state()
+        if not state.path:
+            return 0
+        source_row = self._model.row_for_path(state.path)
+        if source_row < 0:
+            return 0
+        proxy = self._proxy.mapFromSource(self._model.index(source_row))
+        return proxy.row() if proxy.isValid() else 0
 
     @Slot(int)
     def ensurePreview(self, proxy_row: int) -> None:

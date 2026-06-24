@@ -280,11 +280,22 @@ Window {
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
 
-            // Keep the focused card near the centre; the strip slides under it.
+            // Centre the focused card *when it can*, but clamp at the ends so the
+            // strip never shows an empty over-scroll gap. ApplyRange does exactly
+            // that; StrictlyEnforceRange would instead force even the first/last
+            // card dead-centre, leaving a dead band beside it (which read as
+            // "opened a few wallpapers to the left" when the applied wallpaper is
+            // near the start). Near an edge the focused card sits off-centre,
+            // flush with that edge.
             highlightRangeMode: ListView.ApplyRange
             preferredHighlightBegin: Math.round(width / 2 - portraitW / 2)
             preferredHighlightEnd: Math.round(width / 2 + portraitW / 2)
-            highlightMoveDuration: 220
+            // Smooth one-card slide on navigation, but suppressed during the
+            // initial jump to the applied card (see _prime) — otherwise the first
+            // move animates from the view's index-0 baseline and sweeps the whole
+            // strip instead of stepping a single card.
+            readonly property int navMoveDuration: 220
+            highlightMoveDuration: navMoveDuration
 
             // Mouse wheel over the strip steps through wallpapers (one per
             // notch), re-centering on the new focus. Hover alone never moves it.
@@ -313,6 +324,53 @@ Window {
 
             model: controller.model
             currentIndex: 0
+
+            // Open on the wallpaper that's already applied (appliedRow() returns
+            // its row, or 0 when there's no saved state / it left the folder).
+            // The model is fully populated before this view is built (the
+            // Controller scans in its constructor). Latched so a later resize or
+            // model reset doesn't yank the selection back.
+            //
+            // positionViewAtIndex proved unreliable for the initial scroll: at
+            // startup the view has no resolved layout, and with a highlight range
+            // plus lazily-created delegates it left the strip parked at index 0
+            // (the applied card off-screen, so the first arrow key landed on its
+            // neighbour and appeared to skip it). Instead compute contentX
+            // directly — at launch no card has widened yet, so every cell is
+            // exactly portraitW and the strip is uniform, making the centred,
+            // edge-clamped offset exact and independent of layout timing.
+            property bool _primed: false
+            function _prime(): void {
+                if (_primed || count <= 0 || width <= 0)
+                    return
+                _primed = true
+                // Jump instantly (no scroll animation) so the first navigation
+                // slides one card from here rather than sweeping from index 0.
+                highlightMoveDuration = 0
+                currentIndex = controller.appliedRow()
+                _center()
+                // Re-affirm after the view's own first layout pass (which would
+                // otherwise reset contentX to 0), then restore the slide so plain
+                // navigation animates again.
+                Qt.callLater(_settle)
+            }
+            function _settle(): void {
+                _center()
+                highlightMoveDuration = navMoveDuration
+            }
+            function _center(): void {
+                if (count <= 0)
+                    return
+                const step = portraitW + spacing
+                const content = count * portraitW + Math.max(0, count - 1) * spacing
+                // Mirror preferredHighlightBegin (current card's left edge centred),
+                // then clamp so the strip never over-scrolls past either end.
+                const target = currentIndex * step - (width - portraitW) / 2
+                contentX = Math.max(0, Math.min(target, Math.max(0, content - width)))
+            }
+            onCountChanged: _prime()
+            onWidthChanged: _prime()
+            Component.onCompleted: _prime()
 
             delegate: Item {
                 id: cell
