@@ -14,6 +14,7 @@ import json
 import os
 import random
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -106,12 +107,20 @@ _SEAMLESS_DRIVER = Path(__file__).resolve().parent.parent / "seamless.py"
 class WlrootsBackend(WallpaperBackend):
     """Drives swww/mpvpaper on a wlr-layer-shell compositor."""
 
+    def __init__(self) -> None:
+        # The most recent seamless driver (core/seamless.py) that may still be
+        # pending. It brings its video up ~1s in the future, so a superseding
+        # apply has to cancel it (see _cancel_pending_transition) or the stale
+        # video maps on top of the newer wallpaper.
+        self._pending_driver: subprocess.Popen | None = None
+
     def is_available(self) -> bool:
         return os.environ.get("WAYLAND_DISPLAY") is not None
 
     # --- public API -----------------------------------------------------
 
     def set_image(self, path: Path, transition: ImageTransition | None = None) -> None:
+        self._cancel_pending_transition()  # a pending video must not map over the image
         self._stop_video()
         tool = self._resolve(_SWWW_CANDIDATES)
         self._ensure_daemon(tool)
@@ -132,9 +141,20 @@ class WlrootsBackend(WallpaperBackend):
 
     def set_video(self, path: Path, transition: ImageTransition | None = None) -> None:
         mpvpaper = self._require("mpvpaper")
+        # Supersede any in-flight seamless lead-in *before* sampling the running
+        # state, so old_pids includes a (paused) video the cancelled driver had
+        # already mapped — it gets retired below instead of lingering frozen.
+        had_pending = self._pending_driver is not None
+        self._cancel_pending_transition()
         old_pids = self._mpvpaper_pids()
-        # Already rendering this exact file → no-op, avoid stacking a 2nd GPU decoder.
-        if len(old_pids) == 1 and self._video_path_of(old_pids[0]) == str(path):
+        # Already rendering this exact file → no-op, avoid stacking a 2nd GPU
+        # decoder. Skipped when a driver was just cancelled: that mpvpaper is
+        # paused on frame 0 and its un-pauser is now dead, so it must be redone.
+        if (
+            not had_pending
+            and len(old_pids) == 1
+            and self._video_path_of(old_pids[0]) == str(path)
+        ):
             return
         if transition is not None and self._transition_into_video(
             path, transition, old_pids, mpvpaper
@@ -218,9 +238,39 @@ class WlrootsBackend(WallpaperBackend):
         # The driver runs in its own process: it launches mpvpaper paused on the
         # first frame partway through the transition (overlapping cold-start) and
         # unpauses it over IPC the instant the duration elapses — so motion begins
-        # exactly when the animation ends, not a cold-start later.
-        self._spawn_detached([sys.executable, str(_SEAMLESS_DRIVER), cfg])
+        # exactly when the animation ends, not a cold-start later. Tracked so a
+        # quick follow-up apply can cancel it before it maps a now-stale video.
+        self._pending_driver = self._spawn_detached(
+            [sys.executable, str(_SEAMLESS_DRIVER), cfg]
+        )
         return True
+
+    def _cancel_pending_transition(self) -> None:
+        """Kill a still-pending seamless driver so a newer apply wins.
+
+        The driver brings its video up ~1s after apply (it overlaps mpv's
+        cold-start with the swww animation, then unpauses over IPC). Without
+        this, a quick second apply races that timer and the stale video maps on
+        top of the newer wallpaper — switching video->image fast would leave the
+        video showing, and fast video->video would land on the wrong clip.
+
+        Killing the driver's process group stops it before it launches or
+        unpauses mpv. Any mpvpaper it already spawned escaped into its own
+        session (start_new_session), so killpg here doesn't touch it; the caller
+        reaps it separately via old_pids / _stop_video.
+        """
+        driver = self._pending_driver
+        self._pending_driver = None
+        if driver is None:
+            return
+        try:
+            os.killpg(driver.pid, signal.SIGKILL)  # driver is its own session leader
+        except OSError:
+            pass  # already exited
+        try:
+            driver.wait(timeout=1.0)  # reap it so cancelled drivers don't pile up as zombies
+        except subprocess.TimeoutExpired:
+            pass  # SIGKILL is near-instant; never block apply on a stuck reap
 
     @staticmethod
     def _ipc_socket_path() -> str:
@@ -368,9 +418,9 @@ class WlrootsBackend(WallpaperBackend):
         return result
 
     @staticmethod
-    def _spawn_detached(cmd: list[str]) -> None:
-        """Launch a fully detached process (survives GUI exit)."""
-        subprocess.Popen(
+    def _spawn_detached(cmd: list[str]) -> subprocess.Popen:
+        """Launch a fully detached process (survives GUI exit); return its handle."""
+        return subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
