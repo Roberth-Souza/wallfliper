@@ -313,11 +313,19 @@ Window {
             // without holding the whole library's bitmaps in RAM.
             cacheBuffer: 700
 
-            // Card geometry. Portrait by default; the focused card grows to
-            // `expandedW`. These ratios and the settle delay are the only knobs.
+            // Card geometry. Portrait by default; the focused card first *pops*
+            // (full height + a touch wider, instantly) then widens to the full
+            // landscape `expandedW` after the settle delay. These ratios and the
+            // delay are the only knobs.
             readonly property real cardH: height
             readonly property real portraitW: Math.round(cardH * 0.66)
+            // Quick "pop" size the instant a card is focused — a touch wider than
+            // portrait — before the slower landscape widen.
+            readonly property real poppedW: Math.round(cardH * 0.80)
             readonly property real expandedW: Math.round(cardH * 1.35)
+            // Idle cards sit slightly inset so the focused card visibly lifts off
+            // them when it pops to full strip height.
+            readonly property real idleH: Math.round(cardH * 0.92)
             readonly property int expandDelay: 650   // ms focused before widening
             // Decode the card thumbnail at 2x the card height (supersampled), so
             // it stays sharp on any display density without leaning on a possibly
@@ -382,15 +390,21 @@ Window {
                 required property string thumbnail
                 required property string preview
                 property bool selected: ListView.isCurrentItem
-                property bool expanded: false
+                property bool expanded: false   // full landscape widen (after the settle delay)
 
+                // The layout slot stays portrait, so the strip spacing and the
+                // centred-scroll maths (see _center / ApplyRange) never change.
+                // The card *visual* grows beyond this box, centred — so it expands
+                // symmetrically on both sides instead of only rightward — and the
+                // focused cell is z-lifted to draw above the neighbours it overflows.
                 height: carousel.cardH
-                width: expanded ? carousel.expandedW : carousel.portraitW
-                Behavior on width { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+                width: carousel.portraitW
+                z: selected ? 1 : 0
 
-                // The outline lands instantly on focus (immediate feedback); the
-                // widening waits out `expandDelay` so scrubbing fast through cards
-                // doesn't thrash. Collapse is instant when focus leaves.
+                // Pop the instant it's focused (no waiting on expandDelay): the
+                // card lifts to full strip height and a wider portrait, standing
+                // off the idle cards. Only *then*, after the delay, does it widen
+                // to a full landscape card. Collapse settles back when focus leaves.
                 Timer { id: expandTimer; interval: carousel.expandDelay; onTriggered: cell.expanded = true }
                 onSelectedChanged: {
                     if (selected) {
@@ -411,12 +425,52 @@ Window {
                 readonly property bool previewing: selected && kind === "video" && preview !== ""
 
                 Rectangle {
-                    anchors.fill: parent
-                    radius: controller.corners === "sharp" ? 0 : 10
+                    id: cardVisual
+                    anchors.centerIn: parent
+                    // Centred so growth overflows symmetrically. Idle size by
+                    // default; the two states drive the pop, then the widen.
+                    width: carousel.portraitW
+                    height: carousel.idleH
                     color: "#161616"
                     border.color: cell.selected ? "#ffffff" : "transparent"
                     border.width: 2
                     clip: true
+
+                    states: [
+                        State {
+                            name: "popped"
+                            when: cell.selected && !cell.expanded
+                            PropertyChanges {
+                                cardVisual.width: carousel.poppedW
+                                cardVisual.height: carousel.cardH
+                            }
+                        },
+                        State {
+                            name: "expanded"
+                            when: cell.selected && cell.expanded
+                            PropertyChanges {
+                                cardVisual.width: carousel.expandedW
+                                cardVisual.height: carousel.cardH
+                            }
+                        }
+                    ]
+                    transitions: [
+                        // Fast, smooth pop the moment focus lands.
+                        Transition {
+                            to: "popped"
+                            NumberAnimation { properties: "width,height"; duration: 150; easing.type: Easing.OutCubic }
+                        },
+                        // Slower, deliberate landscape widen.
+                        Transition {
+                            to: "expanded"
+                            NumberAnimation { properties: "width,height"; duration: 300; easing.type: Easing.OutCubic }
+                        },
+                        // Settle back to idle when focus leaves.
+                        Transition {
+                            to: ""
+                            NumberAnimation { properties: "width,height"; duration: 180; easing.type: Easing.OutCubic }
+                        }
+                    ]
 
                     Image {
                         anchors.fill: parent
@@ -454,7 +508,7 @@ Window {
                 }
 
                 MouseArea {
-                    anchors.fill: parent
+                    anchors.fill: cardVisual
                     cursorShape: Qt.PointingHandCursor
                     // A single click focuses the card (never hover); double-click
                     // applies and exits.
