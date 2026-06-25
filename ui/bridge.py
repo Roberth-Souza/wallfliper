@@ -31,12 +31,17 @@ from core.integrations import notify_color_tools
 from core.library import scan
 from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
-from core.state import Config, load_config, save_config, save_state
+from core.state import Config, load_config, load_state, save_config, save_state
 from core.thumbnails import ThumbnailLoader
 
 from .model import KIND_ROLE, NAME_ROLE, WallpaperModel
 
-_THUMB_SIZE = QSize(440, 248)
+# Fit-within box for cached card thumbnails. The carousel supersamples each card
+# (decodes at ~2x its on-screen height) for crispness, so the cache needs enough
+# pixels to feed that: a 1920px box (1920x1080 for 16:9, i.e. native for a 1080p
+# source — no upscaling). The on-screen Image still caps its own decode via
+# sourceSize, so this sets the disk-cache ceiling, not per-card RAM.
+_THUMB_SIZE = QSize(1920, 1920)
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -117,12 +122,10 @@ class _FirstFrameWarmer(QRunnable):
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
-    cornersChanged = Signal()
     backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
     folderManualRequested = Signal()
-    imageFilterChanged = Signal()
-    videoFilterChanged = Signal()
+    kindFilterChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -135,9 +138,9 @@ class Controller(QObject):
         self._model = WallpaperModel(self._loader, self._previews, self)
         self._proxy = _WallpaperFilterProxy(self)
         self._proxy.setSourceModel(self._model)
-        # Kind toggles: each is independent. None or both active = all kinds.
-        self._image_filter = False
-        self._video_filter = False
+        # Exclusive kind filter: "all" | "image" | "video". One mode at a time;
+        # each keybind sets its mode idempotently (no per-kind toggling).
+        self._kind_filter = "all"
 
         self._backend = get_backend()
         self._config: Config = load_config()
@@ -166,21 +169,14 @@ class Controller(QObject):
     def wallpaperDir(self) -> str:
         return self._config.wallpaper_dir or ""
 
-    @Property(str, notify=cornersChanged)
-    def corners(self) -> str:
-        return self._config.corners
-
     @Property(float, notify=backgroundOpacityChanged)
     def backgroundOpacity(self) -> float:
         return self._config.background_opacity
 
-    @Property(bool, notify=imageFilterChanged)
-    def imageFilter(self) -> bool:
-        return self._image_filter
-
-    @Property(bool, notify=videoFilterChanged)
-    def videoFilter(self) -> bool:
-        return self._video_filter
+    @Property(str, notify=kindFilterChanged)
+    def kindFilter(self) -> str:
+        """Active kind filter: "all", "image", or "video"."""
+        return self._kind_filter
 
     # --- slots called from QML ------------------------------------------
 
@@ -188,25 +184,33 @@ class Controller(QObject):
     def setFilter(self, text: str) -> None:
         self._proxy.set_text(text)
 
-    @Slot()
-    def toggleImageFilter(self) -> None:
-        self._image_filter = not self._image_filter
-        self.imageFilterChanged.emit()
-        self._apply_kind_filter()
+    @Slot(str)
+    def setKindFilter(self, kind: str) -> None:
+        """Show only `kind` ("image"/"video"), or "all". Idempotent: setting the
+        mode that's already active is a no-op (re-pressing the key does nothing).
+        """
+        if kind not in ("all", "image", "video") or kind == self._kind_filter:
+            return
+        self._kind_filter = kind
+        self._proxy.set_kinds(frozenset() if kind == "all" else frozenset({kind}))
+        self.kindFilterChanged.emit()
 
-    @Slot()
-    def toggleVideoFilter(self) -> None:
-        self._video_filter = not self._video_filter
-        self.videoFilterChanged.emit()
-        self._apply_kind_filter()
+    @Slot(result=int)
+    def appliedRow(self) -> int:
+        """Proxy row of the currently-applied wallpaper, or 0 if none/missing.
 
-    def _apply_kind_filter(self) -> None:
-        kinds: set[str] = set()
-        if self._image_filter:
-            kinds.add("image")
-        if self._video_filter:
-            kinds.add("video")
-        self._proxy.set_kinds(frozenset(kinds))
+        Lets the carousel open centred on what's already on the desktop instead
+        of the first card. Falls back to row 0 when there is no saved state or
+        the file is no longer in the library (e.g. the folder changed).
+        """
+        state = load_state()
+        if not state.path:
+            return 0
+        source_row = self._model.row_for_path(state.path)
+        if source_row < 0:
+            return 0
+        proxy = self._proxy.mapFromSource(self._model.index(source_row))
+        return proxy.row() if proxy.isValid() else 0
 
     @Slot(int)
     def ensurePreview(self, proxy_row: int) -> None:
@@ -317,14 +321,6 @@ class Controller(QObject):
             self.wallpaperDirChanged.emit()
             self.reload()
 
-    @Slot(str)
-    def setCorners(self, corners: str) -> None:
-        if corners not in ("round", "sharp") or corners == self._config.corners:
-            return
-        self._config.corners = corners  # type: ignore[assignment]
-        save_config(self._config)
-        self.cornersChanged.emit()
-
     @Slot(float)
     def setBackgroundOpacity(self, opacity: float) -> None:
         opacity = max(0.0, min(1.0, opacity))
@@ -342,8 +338,8 @@ class Controller(QObject):
         self._model.set_entries(entries)
         self._warmed.clear()
         self._warming.clear()
-        where = self._config.wallpaper_dir or "no folder set"
-        self._set_status(f"{len(entries)} wallpapers · {where}")
+        # No count/folder chrome in the front; clear any stale apply message.
+        self._set_status("")
 
     def _set_status(self, text: str) -> None:
         self._status = text

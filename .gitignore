@@ -12,3 +12,10 @@ build/
 # Agent/design docs kept local, not published
 CLAUDE.md
 DESIGN.md
+CONTEXT.md
+
+# AUR packaging — kept local while AUR is offline (security incident)
+PKGBUILD
+PKGBUILD-git
+*.SRCINFO
+.SRCINFO

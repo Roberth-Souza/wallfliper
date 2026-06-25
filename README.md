@@ -30,12 +30,13 @@ Pick a still image or a looping video, hit `Enter`, done.
 
 - **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
 - **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
+- **Smooth transitions** — animated switches for both images and video
 - **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
 - **Audition mode** — `Space` applies a wallpaper but keeps the picker open, so you can flip through options on your real desktop.
 - **Lightweight & on-demand** — launches when you call it, exits cleanly, and never idles in the background. Rendering is handed to detached daemons.
 - **Restore on login** — remembers your last wallpaper so a video survives a reboot.
 - **Color-scheme integration** — tells noctalia / matugen / wallust / pywal to re-theme your system from the new wallpaper.
-- **Riced to taste** — round/sharp corners and backdrop opacity, made for a `layerrule = blur` compositor.
+- **Riced to taste** — backdrop opacity, made for a `layerrule = blur` compositor.
 
 ## 🖥️ Supported compositors
 
@@ -138,7 +139,6 @@ Applying an image stops any running video wallpaper — there's only ever one wa
 
 Click the gear (or it's keyboard-driven: `j/k` move · `←/→` change · `Enter` select · `Esc` close):
 
-- **corners** — round or sharp (rices the whole UI)
 - **background** — backdrop darkness / opacity
 - **folder** — choose your wallpaper directory (via your `xdg-desktop-portal` file chooser)
 

@@ -28,6 +28,8 @@ from .state import WallpaperKind, cache_dir
 ThumbStrategy = Callable[[Path, Path, QSize], bool]
 
 _THUMB_DIR = cache_dir() / "thumbnails"
+# Fallback box only — the real size is injected by the caller (see bridge.py
+# `_THUMB_SIZE`), which sizes thumbnails for the carousel cards.
 _DEFAULT_SIZE = QSize(360, 360)
 _MAX_WORKERS = 4
 

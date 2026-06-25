@@ -16,8 +16,8 @@ FocusScope {
 
     // Discrete backdrop-opacity steps (alpha of the near-black panel).
     readonly property var opacitySteps: [0.70, 0.80, 0.90, 1.0]
-    property int sel: 0                  // 0 corners · 1 background · 2 folder
-    readonly property int rowCount: 3
+    property int sel: 0                  // 0 background · 1 folder
+    readonly property int rowCount: 2
 
     function nearestOpacityIndex() {
         var best = 0
@@ -43,17 +43,14 @@ FocusScope {
         case Qt.Key_K: case Qt.Key_Up:
             panel.sel = (panel.sel + panel.rowCount - 1) % panel.rowCount; break
         case Qt.Key_H: case Qt.Key_Left:
-            if (panel.sel === 0) controller.setCorners("sharp")
-            else if (panel.sel === 1) panel.stepOpacity(-1)
+            if (panel.sel === 0) panel.stepOpacity(-1)
             break
         case Qt.Key_L: case Qt.Key_Right:
-            if (panel.sel === 0) controller.setCorners("round")
-            else if (panel.sel === 1) panel.stepOpacity(1)
+            if (panel.sel === 0) panel.stepOpacity(1)
             break
         case Qt.Key_Return: case Qt.Key_Enter: case Qt.Key_Space:
-            if (panel.sel === 0) controller.setCorners(controller.corners === "round" ? "sharp" : "round")
-            else if (panel.sel === 1) panel.stepOpacity(1)
-            else if (panel.sel === 2) panel.folderRequested()
+            if (panel.sel === 0) panel.stepOpacity(1)
+            else if (panel.sel === 1) panel.folderRequested()
             break
         default:
             return
@@ -73,7 +70,6 @@ FocusScope {
         anchors.centerIn: parent
         width: 440
         height: col.implicitHeight + 40
-        radius: controller.corners === "sharp" ? 0 : 12
         color: "#141417"
         border.color: "#2a2a2e"
         border.width: 1
@@ -94,36 +90,11 @@ FocusScope {
                 font.pixelSize: 15
             }
 
-            // ---- corners ----
-            Row {
-                spacing: 10
-                Text { text: panel.sel === 0 ? "›" : " "; color: "#ffffff"; width: 10; font.pixelSize: 13 }
-                Text { text: "corners"; color: panel.sel === 0 ? "#ffffff" : "#8a8a8a"; width: 90; font.pixelSize: 13 }
-                Row {
-                    spacing: 14
-                    Repeater {
-                        model: ["sharp", "round"]
-                        delegate: Text {
-                            required property string modelData
-                            text: modelData
-                            color: controller.corners === modelData ? "#ffffff" : "#5a5a5a"
-                            font.underline: controller.corners === modelData
-                            font.pixelSize: 13
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: { panel.sel = 0; controller.setCorners(parent.modelData) }
-                            }
-                        }
-                    }
-                }
-            }
-
             // ---- background darkness (filled-bar level meter) ----
             Row {
                 spacing: 10
-                Text { text: panel.sel === 1 ? "›" : " "; color: "#ffffff"; width: 10; font.pixelSize: 13 }
-                Text { text: "background"; color: panel.sel === 1 ? "#ffffff" : "#8a8a8a"; width: 90; font.pixelSize: 13 }
+                Text { text: panel.sel === 0 ? "›" : " "; color: "#ffffff"; width: 10; font.pixelSize: 13 }
+                Text { text: "background"; color: panel.sel === 0 ? "#ffffff" : "#8a8a8a"; width: 90; font.pixelSize: 13 }
                 Row {
                     spacing: 6
                     Repeater {
@@ -132,12 +103,11 @@ FocusScope {
                             required property int index
                             width: 28
                             height: 10
-                            radius: controller.corners === "sharp" ? 0 : 2
                             color: index <= panel.nearestOpacityIndex() ? "#ffffff" : "#3a3a3a"
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: { panel.sel = 1; controller.setBackgroundOpacity(panel.opacitySteps[parent.index]) }
+                                onClicked: { panel.sel = 0; controller.setBackgroundOpacity(panel.opacitySteps[parent.index]) }
                             }
                         }
                     }
@@ -147,8 +117,8 @@ FocusScope {
             // ---- wallpaper folder ----
             Row {
                 spacing: 10
-                Text { text: panel.sel === 2 ? "›" : " "; color: "#ffffff"; width: 10; font.pixelSize: 13 }
-                Text { text: "folder"; color: panel.sel === 2 ? "#ffffff" : "#8a8a8a"; width: 90; font.pixelSize: 13 }
+                Text { text: panel.sel === 1 ? "›" : " "; color: "#ffffff"; width: 10; font.pixelSize: 13 }
+                Text { text: "folder"; color: panel.sel === 1 ? "#ffffff" : "#8a8a8a"; width: 90; font.pixelSize: 13 }
                 Text {
                     text: controller.wallpaperDir === "" ? "(none) — enter to set" : controller.wallpaperDir
                     color: "#8a8a8a"
@@ -158,7 +128,7 @@ FocusScope {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: { panel.sel = 2; panel.folderRequested() }
+                        onClicked: { panel.sel = 1; panel.folderRequested() }
                     }
                 }
             }
