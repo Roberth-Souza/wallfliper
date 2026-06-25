@@ -28,21 +28,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 
 ## ✨ Features
 
-- **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
-- **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
-- **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
-- **Audition mode** — `Space` applies a wallpaper but keeps the picker open, so you can flip through options on your real desktop.
-- **Lightweight & on-demand** — launches when you call it, exits cleanly, and never idles in the background. Rendering is handed to detached daemons.
-- **Restore on login** — remembers your last wallpaper so a video survives a reboot.
-- **Color-scheme integration** — tells noctalia / matugen / wallust / pywal to re-theme your system from the new wallpaper.
-- **Riced to taste** — backdrop opacity, made for a `layerrule = blur` compositor.
-
-## 🖥️ Supported compositors
-
-Wallfliper draws its picker as a `wlr-layer-shell` overlay and delegates painting to `swww`/`mpvpaper`, so it targets compositors that implement **`wlr-layer-shell`**:
-
-> **Hyprland · Sway · river · Wayfire · niri**
-
+ 
 Out of scope (no layer-shell, or only partial): KDE Plasma, GNOME, X11, Windows.
 
 ## 🙃 Why this exists

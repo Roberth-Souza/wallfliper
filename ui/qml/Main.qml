@@ -280,22 +280,33 @@ Window {
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
 
-            // Centre the focused card *when it can*, but clamp at the ends so the
-            // strip never shows an empty over-scroll gap. ApplyRange does exactly
-            // that; StrictlyEnforceRange would instead force even the first/last
-            // card dead-centre, leaving a dead band beside it (which read as
-            // "opened a few wallpapers to the left" when the applied wallpaper is
-            // near the start). Near an edge the focused card sits off-centre,
-            // flush with that edge.
-            highlightRangeMode: ListView.ApplyRange
-            preferredHighlightBegin: Math.round(width / 2 - portraitW / 2)
-            preferredHighlightEnd: Math.round(width / 2 + portraitW / 2)
-            // Smooth one-card slide on navigation, but suppressed during the
-            // initial jump to the applied card (see _prime) — otherwise the first
-            // move animates from the view's index-0 baseline and sweeps the whole
-            // strip instead of stepping a single card.
+            // Centring is done by hand (see _center + settleTimer), not via a
+            // highlight range. A highlight range re-derives contentX from
+            // currentIndex on the view's own layout schedule: ApplyRange only snaps
+            // to centre on a user-driven index change (so the applied card opened
+            // off-centre until the first arrow key), and StrictlyEnforceRange snaps
+            // every frame but rewrites currentIndex to whatever card is in the
+            // centre slot mid-layout (the "opens on a random wallpaper" bug). With
+            // NoHighlightRange currentIndex is never touched; the only cost is the
+            // initial-layout contentX clobber that settleTimer absorbs (see _prime).
+            highlightRangeMode: ListView.NoHighlightRange
+            // Half-view spacers at both ends so the focused card sits dead-centre
+            // for *every* index — including the first and last, which otherwise
+            // can't centre (nothing to scroll them past the edge into). The pad is
+            // exactly the gap between a centred card and the view edge, so card i
+            // centres at contentX = i*step - edgePad with no clamping artefacts.
+            readonly property real edgePad: Math.max(0, (width - portraitW) / 2)
+            header: Item { width: carousel.edgePad; height: carousel.height }
+            footer: Item { width: carousel.edgePad; height: carousel.height }
+            // Smooth one-card slide on navigation, enabled only after the initial
+            // jump to the applied card (see _prime) so launch snaps there instantly
+            // instead of sweeping from the index-0 baseline.
             readonly property int navMoveDuration: 220
-            highlightMoveDuration: navMoveDuration
+            property bool _animateScroll: false
+            Behavior on contentX {
+                enabled: carousel._animateScroll
+                NumberAnimation { duration: carousel.navMoveDuration; easing.type: Easing.OutCubic }
+            }
 
             // Mouse wheel over the strip steps through wallpapers (one per
             // notch), re-centering on the new focus. Hover alone never moves it.
@@ -336,48 +347,73 @@ Window {
             // Open on the wallpaper that's already applied (appliedRow() returns
             // its row, or 0 when there's no saved state / it left the folder).
             // The model is fully populated before this view is built (the
-            // Controller scans in its constructor). Latched so a later resize or
-            // model reset doesn't yank the selection back.
+            // Controller scans in its constructor), so the only moving part is the
+            // view's own layout. Prime once it has *measured* geometry, gated on
+            // contentWidth > 0 (only non-zero after the first layout pass sized the
+            // delegates). Latched so a later resize/model reset can't yank it back.
             //
-            // positionViewAtIndex proved unreliable for the initial scroll: at
-            // startup the view has no resolved layout, and with a highlight range
-            // plus lazily-created delegates it left the strip parked at index 0
-            // (the applied card off-screen, so the first arrow key landed on its
-            // neighbour and appeared to skip it). Instead compute contentX
-            // directly — at launch no card has widened yet, so every cell is
-            // exactly portraitW and the strip is uniform, making the centred,
-            // edge-clamped offset exact and independent of layout timing.
+            // Why not a highlight range: StrictlyEnforceRange centres reliably but
+            // *rewrites currentIndex* to whatever card lands in the centre slot
+            // during the startup layout transient (the applied row silently becomes
+            // a neighbour — the long-standing "opens on a random wallpaper" bug).
+            // NoHighlightRange leaves currentIndex alone, at the cost that the view
+            // resets contentX to its content-start once or twice during initial
+            // layout, clobbering the offset _center sets. settleTimer re-asserts the
+            // centred offset across those passes until it holds — see below.
             property bool _primed: false
             function _prime(): void {
-                if (_primed || count <= 0 || width <= 0)
+                if (_primed || count <= 0 || width <= 0 || contentWidth <= 0)
                     return
                 _primed = true
-                // Jump instantly (no scroll animation) so the first navigation
-                // slides one card from here rather than sweeping from index 0.
-                highlightMoveDuration = 0
                 currentIndex = controller.appliedRow()
                 _center()
-                // Re-affirm after the view's own first layout pass (which would
-                // otherwise reset contentX to 0), then restore the slide so plain
-                // navigation animates again.
-                Qt.callLater(_settle)
+                settleTimer.restart()
             }
-            function _settle(): void {
-                _center()
-                highlightMoveDuration = navMoveDuration
-            }
+            // Place the current card dead-centre. Every layout slot is exactly
+            // portraitW (the focused card's pop/expand overflows its slot without
+            // resizing it), so card i sits at content-x i*step and centres at
+            // contentX = i*step - edgePad. The end spacers (header/footer) make the
+            // valid contentX range [originX, originX + contentWidth - width] exactly
+            // contain every card's centred offset, so the clamp only guards rounding.
+            // _desiredX is remembered so settleTimer can detect a layout clobber.
+            property real _desiredX: 0
             function _center(): void {
-                if (count <= 0)
+                if (count <= 0 || width <= 0)
                     return
                 const step = portraitW + spacing
-                const content = count * portraitW + Math.max(0, count - 1) * spacing
-                // Mirror preferredHighlightBegin (current card's left edge centred),
-                // then clamp so the strip never over-scrolls past either end.
-                const target = currentIndex * step - (width - portraitW) / 2
-                contentX = Math.max(0, Math.min(target, Math.max(0, content - width)))
+                const target = currentIndex * step - edgePad
+                const maxX = originX + Math.max(0, contentWidth - width)
+                _desiredX = Math.max(originX, Math.min(target, maxX))
+                contentX = _desiredX
             }
+            // Bounded startup settle, NOT an idle loop: it runs only right after
+            // priming and stops the instant the centred offset holds (or after a
+            // hard cap). The view clobbers contentX back to its content-start during
+            // the first few layout passes; re-assert each frame until it sticks for
+            // 3 consecutive frames, then enable the navigation slide and stop. There
+            // is no clean QML signal for "initial layout settled", so this is the
+            // event-driven alternative to racing a single fixed delay.
+            Timer {
+                id: settleTimer
+                interval: 16
+                repeat: true
+                property int stable: 0
+                property int ticks: 0
+                onTriggered: {
+                    ticks++
+                    if (Math.abs(carousel.contentX - carousel._desiredX) < 0.5) {
+                        if (++stable >= 3) { stop(); carousel._animateScroll = true }
+                    } else {
+                        stable = 0
+                        carousel._center()
+                    }
+                    if (ticks > 40) { stop(); carousel._animateScroll = true }
+                }
+            }
+            onCurrentIndexChanged: _center()
+            onContentWidthChanged: _prime()
+            onWidthChanged: { _prime(); _center() }
             onCountChanged: _prime()
-            onWidthChanged: _prime()
             Component.onCompleted: _prime()
 
             delegate: Item {
