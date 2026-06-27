@@ -70,9 +70,16 @@ def _resolve_random(transition: ImageTransition) -> ImageTransition:
 # playback. no-config isolates from the user's ~/.config/mpv: a custom mpv.conf
 # (broken hwdec/vo, scripts) is a common cause of a wallpaper that never plays.
 # no-osd hides mpv's corner messages over the wallpaper. Hardware decode +
-# high-quality scaling/interpolation do the rest. The initial pause state is
-# appended per-launch (see _mpvpaper_cmd): a hard cut starts playing at once,
-# the seamless lead-in starts paused on frame 0 and is unpaused over IPC.
+# high-quality scaling do the rest. The initial pause state is appended per-launch
+# (see _mpvpaper_cmd): a hard cut starts playing at once, the seamless lead-in
+# starts paused on frame 0 and is unpaused over IPC.
+#
+# video-sync stays on mpv's default decoupled (audio/system) clock rather than
+# display-resample: a wallpaper outlives DPMS sleep and suspend, and slaving
+# playback to the display's vsync clock makes mpv freeze on a stale, wrongly
+# scaled buffer when the output is torn down and recreated on wake. For the same
+# reason interpolation/tscale are omitted — they need continuous presentation
+# feedback, are pure GPU cost on a looping background, and stall across reconfig.
 _MPV_OPTIONS = " ".join(
     [
         "loop",
@@ -81,9 +88,7 @@ _MPV_OPTIONS = " ".join(
         "no-osd",
         "--hwdec=auto",
         "--profile=high-quality",
-        "--video-sync=display-resample",
-        "--interpolation",
-        "--tscale=oversample",
+        "--video-sync=audio",
     ]
 )
 
