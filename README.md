@@ -48,7 +48,9 @@ Out of scope (no layer-shell, or only partial): KDE Plasma, GNOME, X11, Windows.
 
 ## 🙃 Why this exists
 
-Honestly? I just wanted to give Claude Code a try , and ended up enjoying it a little too much.
+Honestly? I just wanted to give Claude Code a try, and ended up enjoying it a little too much.
+
+Wallfliper was built mostly **"low-code"** — most of the codebase was written with the help of AI tooling like **Claude Code** and **Google Stitch**, with me steering the design, scope and decisions.
 
 ## 📦 Installation
 

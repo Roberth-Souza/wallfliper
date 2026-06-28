@@ -9,9 +9,7 @@ build/
 # Editor settings (machine-local)
 .vscode/
 
-# Agent/design docs kept local, not published
-CLAUDE.md
-DESIGN.md
+# Working notes kept local, not published
 CONTEXT.md
 
 # AUR packaging — kept local while AUR is offline (security incident)
