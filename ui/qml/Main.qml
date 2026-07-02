@@ -290,14 +290,11 @@ Window {
             // NoHighlightRange currentIndex is never touched; the only cost is the
             // initial-layout contentX clobber that settleTimer absorbs (see _prime).
             highlightRangeMode: ListView.NoHighlightRange
-            // Half-view spacers at both ends so the focused card sits dead-centre
-            // for *every* index — including the first and last, which otherwise
-            // can't centre (nothing to scroll them past the edge into). The pad is
-            // exactly the gap between a centred card and the view edge, so card i
-            // centres at contentX = i*step - edgePad with no clamping artefacts.
+            // Gap between a centred card and the view edge. Card i centres at
+            // contentX = i*step - edgePad; _center clamps that to the real content
+            // range, so cards near the ends pin to the edge instead of centring
+            // (no end spacers — the strip never scrolls past its first/last card).
             readonly property real edgePad: Math.max(0, (width - portraitW) / 2)
-            header: Item { width: carousel.edgePad; height: carousel.height }
-            footer: Item { width: carousel.edgePad; height: carousel.height }
             // Smooth one-card slide on navigation, enabled only after the initial
             // jump to the applied card (see _prime) so launch snaps there instantly
             // instead of sweeping from the index-0 baseline.
@@ -369,19 +366,25 @@ Window {
                 _center()
                 settleTimer.restart()
             }
-            // Place the current card dead-centre. Every layout slot is exactly
-            // portraitW (the focused card's pop/expand overflows its slot without
-            // resizing it), so card i sits at content-x i*step and centres at
-            // contentX = i*step - edgePad. The end spacers (header/footer) make the
-            // valid contentX range [originX, originX + contentWidth - width] exactly
-            // contain every card's centred offset, so the clamp only guards rounding.
+            // Place the current card centred *within the content range*. Every
+            // layout slot is exactly portraitW (the focused card's pop/expand
+            // overflows its slot without resizing it), so card i sits at content-x
+            // originX + i*step and wants contentX = originX + i*step - edgePad.
+            // originX is NOT a constant 0: the view rebases its content origin as
+            // delegates are created/destroyed while scrolling, shifting every
+            // item's content-x with it — dropping it from the formula pins the
+            // current card to the view start (contentX lands step-aligned on the
+            // card itself). The clamp to [originX, originX + contentWidth - width]
+            // is load-bearing: the first and last couple of cards can't centre
+            // without scrolling past the strip's ends, so they pin to the
+            // start/end edge instead — by design.
             // _desiredX is remembered so settleTimer can detect a layout clobber.
             property real _desiredX: 0
             function _center(): void {
                 if (count <= 0 || width <= 0)
                     return
                 const step = portraitW + spacing
-                const target = currentIndex * step - edgePad
+                const target = originX + currentIndex * step - edgePad
                 const maxX = originX + Math.max(0, contentWidth - width)
                 _desiredX = Math.max(originX, Math.min(target, maxX))
                 contentX = _desiredX
@@ -411,6 +414,8 @@ Window {
                 }
             }
             onCurrentIndexChanged: _center()
+            // An origin rebase mid-flight shifts every item; re-derive the offset.
+            onOriginXChanged: _center()
             onContentWidthChanged: _prime()
             onWidthChanged: { _prime(); _center() }
             onCountChanged: _prime()
@@ -428,9 +433,11 @@ Window {
 
                 // The layout slot stays portrait, so the strip spacing and the
                 // centred-scroll maths (see _center / ApplyRange) never change.
-                // The card *visual* grows beyond this box, centred — so it expands
-                // symmetrically on both sides instead of only rightward — and the
-                // focused cell is z-lifted to draw above the neighbours it overflows.
+                // The card *visual* grows beyond this box — symmetrically when it
+                // can, nudged inward when the cell is pinned at a view edge (see
+                // cardVisual.x) so the expansion never overflows off-screen — and
+                // the focused cell is z-lifted to draw above the neighbours it
+                // overflows.
                 height: carousel.cardH
                 width: carousel.portraitW
                 z: selected ? 1 : 0
@@ -460,9 +467,25 @@ Window {
 
                 Rectangle {
                     id: cardVisual
-                    anchors.centerIn: parent
-                    // Centred so growth overflows symmetrically. Idle size by
-                    // default; the two states drive the pop, then the widen.
+                    anchors.verticalCenter: parent.verticalCenter
+                    // Centred in the slot so growth overflows symmetrically. The
+                    // focused card only is clamped to the viewport: when its cell
+                    // sits pinned at a view edge (first/last cards no longer centre
+                    // — see _center), the expansion overflow is pushed inward
+                    // instead of clipping off-screen. Idle cards must NOT clamp —
+                    // clamping would drag off-screen cached delegates back into
+                    // view, piling them up at the edges.
+                    x: {
+                        const centred = (cell.width - width) / 2
+                        if (!cell.selected)
+                            return centred
+                        const cellViewX = cell.x - carousel.contentX
+                        const minX = -cellViewX
+                        const maxX = carousel.width - cellViewX - width
+                        return maxX < minX ? centred
+                                           : Math.max(minX, Math.min(centred, maxX))
+                    }
+                    // Idle size by default; the two states drive the pop, then the widen.
                     width: carousel.portraitW
                     height: carousel.idleH
                     color: "#161616"
