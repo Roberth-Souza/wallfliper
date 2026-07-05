@@ -122,7 +122,6 @@ class _FirstFrameWarmer(QRunnable):
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
-    backgroundOpacityChanged = Signal()
     folderPickerClosed = Signal()
     folderManualRequested = Signal()
     kindFilterChanged = Signal()
@@ -168,10 +167,6 @@ class Controller(QObject):
     @Property(str, notify=wallpaperDirChanged)
     def wallpaperDir(self) -> str:
         return self._config.wallpaper_dir or ""
-
-    @Property(float, notify=backgroundOpacityChanged)
-    def backgroundOpacity(self) -> float:
-        return self._config.background_opacity
 
     @Property(str, notify=kindFilterChanged)
     def kindFilter(self) -> str:
@@ -320,15 +315,6 @@ class Controller(QObject):
             save_config(self._config)
             self.wallpaperDirChanged.emit()
             self.reload()
-
-    @Slot(float)
-    def setBackgroundOpacity(self, opacity: float) -> None:
-        opacity = max(0.0, min(1.0, opacity))
-        if opacity == self._config.background_opacity:
-            return
-        self._config.background_opacity = opacity
-        save_config(self._config)
-        self.backgroundOpacityChanged.emit()
 
     # --- internals ------------------------------------------------------
 

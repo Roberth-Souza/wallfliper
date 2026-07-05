@@ -20,8 +20,8 @@ FocusScope {
     property string error: ""
 
     // Greyscale palette, matching Settings.qml (white = focus/emphasis).
-    readonly property color cWhite: "#ffffff"
-    readonly property color cMuted: "#8a8a8a"
+    readonly property color cWhite: Theme.text
+    readonly property color cMuted: Theme.muted
     readonly property color cFaint: "#5a5a5a"
     readonly property color cLine:  "#2a2a2e"
 
@@ -52,9 +52,9 @@ FocusScope {
         anchors.centerIn: parent
         width: 560
         height: col.implicitHeight + 40
-        color: "#141417"
-        border.color: entry.cLine
-        border.width: 1
+        color: Theme.surface
+        border.color: Theme.frame
+        border.width: Theme.frameWidth
         // Swallow clicks so click-away on the dim doesn't fire through the card.
         MouseArea { anchors.fill: parent }
 
@@ -69,12 +69,14 @@ FocusScope {
             Text {
                 text: "set wallpaper folder"
                 color: entry.cWhite
+                font.family: Theme.fontFamily
+                font.bold: true
                 font.pixelSize: 14
-                font.underline: true
             }
             Text {
                 text: "no file chooser available — type a path"
                 color: entry.cMuted
+                font.family: Theme.fontFamily
                 font.pixelSize: 12
             }
 
@@ -95,6 +97,7 @@ FocusScope {
                     anchors.rightMargin: 10
                     verticalAlignment: TextInput.AlignVCenter
                     color: entry.cWhite
+                    font.family: Theme.fontFamily
                     font.pixelSize: 13
                     clip: true
                     selectByMouse: true
@@ -106,6 +109,7 @@ FocusScope {
                         anchors.verticalCenter: parent.verticalCenter
                         text: "~/Pictures/Wallpapers"
                         color: entry.cFaint
+                        font.family: Theme.fontFamily
                         font.pixelSize: 13
                         visible: input.text === ""
                     }
@@ -118,7 +122,8 @@ FocusScope {
             Text {
                 width: col.width
                 text: entry.error !== "" ? entry.error : "enter confirm    esc cancel"
-                color: entry.error !== "" ? entry.cWhite : "#4a4a4a"
+                color: entry.error !== "" ? entry.cWhite : Theme.faint
+                font.family: Theme.fontFamily
                 font.pixelSize: 11
             }
         }

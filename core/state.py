@@ -20,8 +20,9 @@ WallpaperKind = Literal["image", "video"]
 _APP = "wallfliper"
 
 # Persisted settings keys read back in load_config (kept in one place so the
-# loader and the dataclass can't drift).
-_CONFIG_KEYS = ("wallpaper_dir", "color_hook", "background_opacity")
+# loader and the dataclass can't drift). Unknown keys in an existing
+# config.json (e.g. the retired background_opacity) are silently ignored.
+_CONFIG_KEYS = ("wallpaper_dir", "color_hook")
 
 
 def config_dir() -> Path:
@@ -56,10 +57,6 @@ class Config:
     # wallpaper path. Empty = auto: notify noctalia-shell if it's running
     # (it derives its color scheme from the wallpaper but doesn't watch swww).
     color_hook: str = ""
-    # UI customization (Hyprland ricing). Backdrop opacity (0..1 alpha of the
-    # near-black panel; lower = more see-through for a `layerrule = blur`
-    # compositor).
-    background_opacity: float = 0.9
 
     @property
     def wallpaper_path(self) -> Path | None:

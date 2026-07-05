@@ -53,16 +53,18 @@ Window {
 
     // Backdrop (the visible panel), centered as a card so there's always a
     // transparent margin to click away on. Capped to the design size, shrinking
-    // to fit smaller screens. Alpha < 1 is what blur shows through; without blur
-    // it's just a translucent dark panel. Opacity is a user setting (see
-    // Settings.qml), persisted in config.json. Base is near-black (#070708);
-    // only the alpha varies. Sharp corners throughout, per DESIGN.md.
+    // to fit smaller screens. Framed by the 2px white border and painted with
+    // the fixed near-opaque backdrop from Theme (matched to the system rofi
+    // theme; alpha < 1 is what a compositor blur rule shows through). Sharp
+    // corners throughout, per DESIGN.md.
     Rectangle {
         id: bg
         anchors.centerIn: parent
         width: Math.min(1340, win.width - 80)
         height: Math.min(510, win.height - 80)
-        color: Qt.rgba(7 / 255, 7 / 255, 8 / 255, controller.backgroundOpacity)
+        color: Theme.bg
+        border.color: Theme.frame
+        border.width: Theme.frameWidth
 
         // Swallow clicks on the panel so they don't fall through to dismissArea;
         // only clicks on the transparent margin outside the card close the app.
@@ -73,13 +75,15 @@ Window {
         }
     }
 
-    // Toggles the lazy settings overlay (gear icon). Closed = panel unloaded.
+    // Toggles the lazy settings overlay. No gear icon: settings open by typing
+    // the `/config` command in search (Enter). Closed = panel unloaded.
     property bool settingsOpen: false
 
     // Search is modal: `/` enters search mode so the printable keys — including
     // the w/a/s/d + h/j/k/l navigation and space — stay free as commands in
     // normal mode. Once searching, every printable key filters live (any
-    // filename is typable); arrows still move. Shown in the top bar as `/<query>`.
+    // filename is typable); arrows still move. Shown in the top prompt as
+    // `/<query>`, rofi-style, next to the app name.
     //
     // Leaving search has two flavors: `Enter`, an arrow key, or clicking a
     // result *confirms* the filter (exitSearchKeep — drop to normal nav, query
@@ -166,7 +170,7 @@ Window {
     FocusScope {
         id: mainScope
         anchors.fill: bg
-        anchors.margins: 8
+        anchors.margins: 16
         focus: true
 
         Keys.onPressed: (event) => {
@@ -185,9 +189,15 @@ Window {
                 // space) is part of the query so any filename is typable. An
                 // arrow key navigates results, not the query, so it confirms the
                 // filter (keeps the query, drops to normal nav) and moves; Enter
-                // confirms without moving; `/` again cancels it.
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                    win.exitSearchKeep()
+                // confirms without moving; `/` again cancels it. `/config` is a
+                // command, not a query: Enter on it opens settings instead.
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (win.searchText === "config") {
+                        win.exitSearchClear()
+                        win.settingsOpen = true
+                    } else
+                        win.exitSearchKeep()
+                }
                 else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left) {
                     win.exitSearchKeep()
                     carousel.decrementCurrentIndex()
@@ -235,7 +245,7 @@ Window {
             event.accepted = true
         }
 
-        // ---- Top bar ----
+        // ---- Top prompt: `wallfliper  /<query>`, rofi-style, top-left ----
         Item {
             id: topBar
             anchors.top: parent.top
@@ -243,17 +253,30 @@ Window {
             anchors.right: parent.right
             height: 26
 
-            // Settings gear — the only chrome up here, top-left.
-            Text {
-                text: "⚙"   // gear (only icon allowed — no word is shorter)
-                color: "#808080"
-                font.pixelSize: 18
+            Row {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: win.settingsOpen = true
+                spacing: 12
+
+                Text {
+                    id: promptTitle
+                    text: "wallfliper"
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.bold: true
+                    font.pixelSize: 15
+                }
+
+                // The query grows next to the name as you type; a `|` cursor
+                // marks live editing. White while editing, grey when a filter
+                // persists after leaving search, hidden when idle.
+                Text {
+                    anchors.baseline: promptTitle.baseline
+                    visible: win.searching || win.searchText !== ""
+                    text: "/" + win.searchText + (win.searching ? "|" : "")
+                    color: win.searching ? Theme.text : Theme.muted
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 15
                 }
             }
         }
@@ -262,8 +285,8 @@ Window {
         // The wallpapers are the content; chrome recedes. Cards are portrait so
         // a handful read at once; the focused card widens to a landscape card
         // (after a short settle delay) so its wallpaper — almost always 16:9 —
-        // is legible. Centered in the free vertical band between the top bar and
-        // the bottom search; height-capped so a few cards fit across, not a wall.
+        // is legible. Centered in the free vertical band below the top prompt;
+        // height-capped so a few cards fit across, not a wall.
         ListView {
             id: carousel
             anchors.left: parent.left
@@ -489,8 +512,8 @@ Window {
                     width: carousel.portraitW
                     height: carousel.idleH
                     color: "#161616"
-                    border.color: cell.selected ? "#ffffff" : "transparent"
-                    border.width: 2
+                    border.color: cell.selected ? Theme.frame : "transparent"
+                    border.width: Theme.frameWidth
                     clip: true
 
                     states: [
@@ -560,6 +583,7 @@ Window {
                         visible: cell.thumbnail === "" && !cell.previewing
                         text: cell.kind === "video" ? "▶" : "…"
                         color: "#3a3a3a"
+                        font.family: Theme.fontFamily
                         font.pixelSize: 24
                     }
                 }
@@ -579,26 +603,6 @@ Window {
             }
         }
 
-        // ---- Bottom bar: the minimal search marker, bottom-left ----
-        Item {
-            id: bottomBar
-            anchors.bottom: parent.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 20
-
-            // Just a `/` at the bottom-left (mirrors the gear at top-left); it
-            // grows into `/<query>` as you type. No placeholder word, no box.
-            Text {
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                text: "/" + win.searchText
-                // White while editing; grey when a filter persists after leaving
-                // search; faint when idle.
-                color: win.searching ? "#ffffff" : (win.searchText !== "" ? "#909090" : "#4a4a4a")
-                font.pixelSize: 14
-            }
-        }
     }
 
     // Lazy settings overlay: only instantiated while open (active binding), so a
