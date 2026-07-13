@@ -267,6 +267,12 @@ class Controller(QObject):
         entry = self._model.entry_at(source)
         if entry is None:
             return
+        # Cache paths key on the source file's stat (mtime+size), so they must
+        # be resolved while the file still exists — after unlink they raise.
+        try:
+            stale = (self._loader.cache_path(entry), self._previews.cache_path(entry))
+        except OSError:
+            stale = ()  # source already gone; nothing to key the caches with
         try:
             entry.path.unlink(missing_ok=True)
         except OSError as exc:
@@ -276,7 +282,7 @@ class Controller(QObject):
         key = str(entry.path)
         self._warmed.discard(key)
         self._warming.discard(key)
-        for cached in (self._loader.cache_path(entry), self._previews.cache_path(entry)):
+        for cached in stale:
             try:
                 cached.unlink(missing_ok=True)
             except OSError:
