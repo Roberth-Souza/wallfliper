@@ -257,6 +257,32 @@ class Controller(QObject):
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
 
+    @Slot(int)
+    def deleteWallpaper(self, proxy_row: int) -> None:
+        """Permanently delete the wallpaper file and drop its card. No undo:
+        Shift+D is a deliberate two-hand chord, so no confirmation dialog.
+        Cached thumbnail/preview are removed too so they don't linger orphaned.
+        """
+        source = self._proxy.mapToSource(self._proxy.index(proxy_row, 0))
+        entry = self._model.entry_at(source)
+        if entry is None:
+            return
+        try:
+            entry.path.unlink(missing_ok=True)
+        except OSError as exc:
+            self._set_status(f"⚠ delete failed: {exc}")
+            return
+        self._model.remove_row(source.row())
+        key = str(entry.path)
+        self._warmed.discard(key)
+        self._warming.discard(key)
+        for cached in (self._loader.cache_path(entry), self._previews.cache_path(entry)):
+            try:
+                cached.unlink(missing_ok=True)
+            except OSError:
+                pass  # cache cleanup is best-effort
+        self._set_status(f"✗ deleted {entry.name}")
+
     @Slot(result=bool)
     def folderPortalAvailable(self) -> bool:
         """Whether a FileChooser portal is reachable (see core/portal.py).

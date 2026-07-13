@@ -234,6 +234,15 @@ Window {
                 controller.setKindFilter("video")   // videos only
             else if (event.text === "e")
                 controller.setKindFilter("all")     // everything
+            else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
+                // Shift+D: delete the selected wallpaper file permanently (no
+                // confirmation). Must precede the nav branch below, which
+                // claims plain `d`. The next card slides into the centre
+                // (ListView keeps the numeric currentIndex, which now names
+                // the following row; onCountChanged re-centres it).
+                if (carousel.currentIndex >= 0)
+                    controller.deleteWallpaper(carousel.currentIndex)
+            }
             else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
                      || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
                 carousel.decrementCurrentIndex()
@@ -441,7 +450,9 @@ Window {
             onOriginXChanged: _center()
             onContentWidthChanged: _prime()
             onWidthChanged: { _prime(); _center() }
-            onCountChanged: _prime()
+            // After a removal the numeric currentIndex is unchanged but names
+            // the next card, so no currentIndexChanged fires — re-centre here.
+            onCountChanged: { _prime(); _center() }
             Component.onCompleted: _prime()
 
             delegate: Item {

@@ -130,6 +130,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `i` · `v` | Toggle the **image** / **video** filter (also clickable buttons) |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
+| `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
 | Double-click | Apply and close |
 | Click outside the panel | Close |

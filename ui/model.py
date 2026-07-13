@@ -74,6 +74,28 @@ class WallpaperModel(QAbstractListModel):
         self._preview_checked.clear()
         self.endResetModel()
 
+    def remove_row(self, row: int) -> WallpaperEntry | None:
+        """Drop the entry at `row` and return it, or None if out of range.
+
+        Only detaches the entry from the model/caches; deleting the file on
+        disk is the caller's job.
+        """
+        if not (0 <= row < len(self._entries)):
+            return None
+        entry = self._entries[row]
+        key = str(entry.path)
+        self.beginRemoveRows(QModelIndex(), row, row)
+        del self._entries[row]
+        self._requested.discard(key)
+        self._preview_requested.discard(key)
+        self._preview_checked.discard(key)
+        self._thumb_uri.pop(key, None)
+        self._preview_uri.pop(key, None)
+        # Every row after the removed one shifts; rebuild the reverse map.
+        self._row_by_path = {str(e.path): r for r, e in enumerate(self._entries)}
+        self.endRemoveRows()
+        return entry
+
     def entry_at(self, index: _Index) -> WallpaperEntry | None:
         if not index.isValid() or not (0 <= index.row() < len(self._entries)):
             return None
