@@ -7,16 +7,17 @@ Window {
     visible: true
     width: Screen.width
     height: Screen.height
-    // Transparent surface: the real backdrop is `bg` below, painted with alpha
-    // so a Hyprland `layerrule = blur, wallfliper` blurs *only* the background.
-    // Thumbnails and text are opaque (drawn on top of bg) so they stay crisp.
-    // Tune the alpha in `bg.color` for more/less see-through.
+    // Transparent surface: there is no backdrop panel — the desktop shows
+    // through everywhere except the floating bar and the wallcards. The bar is
+    // painted with alpha (Theme.bg) so a Hyprland `layerrule = blur,
+    // wallfliper` blurs only it; cards and text are opaque and stay crisp.
     color: "transparent"
 
     // wlr-layer-shell: full-screen overlay above everything (anchored to all
     // four edges). The surface fills the screen but is transparent except for
-    // the centered `bg` card; the transparent margin is a click-catcher that
-    // dismisses (see dismissArea below) — click-away-to-close, like a launcher.
+    // the floating bar and the card strip; the transparent rest is a
+    // click-catcher that dismisses (see dismissArea below) —
+    // click-away-to-close, like a launcher.
     //
     // Exclusive keyboard: the overlay holds the keyboard the whole time it's
     // mapped, like a launcher (rofi/wofi). OnDemand delegates focus to the
@@ -40,38 +41,20 @@ Window {
     Component.onCompleted: win.requestActivate()
     onActiveChanged: if (active) mainScope.forceActiveFocus()
 
-    // Click-away-to-close: a full-screen catcher behind the card. The surface is
-    // full-screen but transparent here, so the desktop shows through (and
-    // `layerrule = ignorezero` keeps blur off it); clicking anywhere outside the
-    // card dismisses, like clicking away from a launcher. Clicks on the card
-    // itself are swallowed (see the MouseArea inside bg) so they never reach it.
+    // Click-away-to-close: a full-screen catcher behind the bar and the cards.
+    // There is no backdrop panel — the surface is transparent everywhere except
+    // the floating bar and the wallcards, so the desktop shows through (and
+    // `layerrule = ignorezero` keeps blur off it). Clicking empty space cancels
+    // an active search first, then dismisses, like clicking away from a
+    // launcher. Clicks on the bar/cards are swallowed by their own MouseAreas.
     MouseArea {
         id: dismissArea
         anchors.fill: parent
-        onClicked: Qt.quit()
-    }
-
-    // Backdrop (the visible panel), centered as a card so there's always a
-    // transparent margin to click away on. Capped to the design size, shrinking
-    // to fit smaller screens. Framed by the 2px white border and painted with
-    // the fixed near-opaque backdrop from Theme (matched to the system rofi
-    // theme; alpha < 1 is what a compositor blur rule shows through). Sharp
-    // corners throughout, per DESIGN.md.
-    Rectangle {
-        id: bg
-        anchors.centerIn: parent
-        width: Math.min(1340, win.width - 80)
-        height: Math.min(510, win.height - 80)
-        color: Theme.bg
-        border.color: Theme.frame
-        border.width: Theme.frameWidth
-
-        // Swallow clicks on the panel so they don't fall through to dismissArea;
-        // only clicks on the transparent margin outside the card close the app.
-        // While searching, a click on empty panel chrome cancels search.
-        MouseArea {
-            anchors.fill: parent
-            onClicked: if (win.searching) win.exitSearchClear()
+        onClicked: {
+            if (win.searching)
+                win.exitSearchClear()
+            else
+                Qt.quit()
         }
     }
 
@@ -169,8 +152,7 @@ Window {
 
     FocusScope {
         id: mainScope
-        anchors.fill: bg
-        anchors.margins: 16
+        anchors.fill: parent
         focus: true
 
         Keys.onPressed: (event) => {
@@ -254,16 +236,28 @@ Window {
             event.accepted = true
         }
 
-        // ---- Top prompt: `wallfliper  /<query>`, rofi-style, top-left ----
-        Item {
+        // ---- Floating bar: `wallfliper  /<query>`, detached, centered above
+        // the card strip. The only piece of chrome besides the cards; future
+        // features (filters, source tabs) dock here. Framed with the same 2px
+        // white border language as the selected card. Visuals only — keys stay
+        // on mainScope.
+        Rectangle {
             id: topBar
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 26
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: carousel.top
+            anchors.bottomMargin: 24
+            width: Math.max(320, promptRow.implicitWidth + 40)
+            height: promptRow.implicitHeight + 22
+            color: Theme.bg
+            border.color: Theme.frame
+            border.width: Theme.frameWidth
+
+            // Swallow clicks so they don't fall through to dismissArea.
+            MouseArea { anchors.fill: parent }
 
             Row {
-                anchors.left: parent.left
+                id: promptRow
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 12
 
@@ -298,16 +292,15 @@ Window {
         // height-capped so a few cards fit across, not a wall.
         ListView {
             id: carousel
-            anchors.left: parent.left
-            anchors.right: parent.right
-            // Extra horizontal breathing room between the cards and the frame.
-            anchors.leftMargin: 22
-            anchors.rightMargin: 22
+            // Centered band with side margins (not full-bleed): ~85% of the
+            // screen wide, ~40% tall — the strip floats on the bare desktop.
+            anchors.horizontalCenter: parent.horizontalCenter
             anchors.verticalCenter: parent.verticalCenter
-            height: Math.min(parent.height - 56, 420)
+            width: Math.round(parent.width * 0.85)
+            height: Math.min(Math.round(win.height * 0.40), 480)
             clip: true
             orientation: ListView.Horizontal
-            spacing: 18
+            spacing: 10
             // No drag/flick: movement is keyboard + wheel only, so the wheel
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
@@ -358,9 +351,9 @@ Window {
             readonly property real cardH: height
             readonly property real portraitW: Math.round(cardH * 0.66)
             // Quick "pop" size the instant a card is focused — a touch wider than
-            // portrait — before the slower landscape widen.
+            // portrait — before the slower widen to the wallpaper's own aspect
+            // (per-cell `expandedW` on the delegate).
             readonly property real poppedW: Math.round(cardH * 0.80)
-            readonly property real expandedW: Math.round(cardH * 1.35)
             // Idle cards sit slightly inset so the focused card visibly lifts off
             // them when it pops to full strip height.
             readonly property real idleH: Math.round(cardH * 0.92)
@@ -499,6 +492,18 @@ Window {
                 // lazily (cached after the first time); at most one cell previews.
                 readonly property bool previewing: selected && kind === "video" && preview !== ""
 
+                // Expanded width follows the wallpaper's real aspect so the
+                // whole image is visible, corners included. The thumbnail's
+                // implicit size carries the source aspect (decode preserves
+                // it); 16:9 until it's ready. Clamped so ultrawide art stays
+                // on-screen — the Fit fillMode letterboxes the clamped case.
+                readonly property real imgAspect:
+                    thumb.status === Image.Ready && thumb.implicitHeight > 0
+                        ? thumb.implicitWidth / thumb.implicitHeight : 16 / 9
+                readonly property real expandedW:
+                    Math.min(Math.round(carousel.cardH * imgAspect),
+                             Math.round(carousel.width * 0.75))
+
                 Rectangle {
                     id: cardVisual
                     anchors.verticalCenter: parent.verticalCenter
@@ -526,6 +531,24 @@ Window {
                     border.color: cell.selected ? Theme.frame : "transparent"
                     border.width: Theme.frameWidth
                     clip: true
+                    antialiasing: true
+
+                    // Idle cards lean as sheared parallelograms (noctalia-style
+                    // slats); focus straightens the card. The shear is uniform
+                    // across idle cards, so their edges stay parallel and the
+                    // strip spacing reads unchanged. Shear about the vertical
+                    // centre so the card leans in place instead of walking.
+                    property real slant: cell.selected ? 0 : Theme.cardSlant
+                    Behavior on slant {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
+                    transform: Matrix4x4 {
+                        matrix: Qt.matrix4x4(
+                            1, cardVisual.slant, 0, -cardVisual.slant * cardVisual.height / 2,
+                            0, 1, 0, 0,
+                            0, 0, 1, 0,
+                            0, 0, 0, 1)
+                    }
 
                     states: [
                         State {
@@ -540,7 +563,7 @@ Window {
                             name: "expanded"
                             when: cell.selected && cell.expanded
                             PropertyChanges {
-                                cardVisual.width: carousel.expandedW
+                                cardVisual.width: cell.expandedW
                                 cardVisual.height: carousel.cardH
                             }
                         }
@@ -564,6 +587,7 @@ Window {
                     ]
 
                     Image {
+                        id: thumb
                         anchors.fill: parent
                         anchors.margins: 2
                         source: cell.thumbnail
@@ -571,10 +595,13 @@ Window {
                         asynchronous: true
                         cache: true
                         // Portrait cards crop a landscape wallpaper to a centre
-                        // slice; the expanded card reveals the full width. Decode
-                        // by card height (the crop's constraining axis) so it's
-                        // sharp without over-decoding the cropped-away width.
-                        fillMode: Image.PreserveAspectCrop
+                        // slice. The expanded card matches the source aspect, so
+                        // Fit shows the full image (and letterboxes instead of
+                        // cropping when expandedW was clamped). Decode by card
+                        // height (the crop's constraining axis) so it's sharp
+                        // without over-decoding the cropped-away width.
+                        fillMode: cell.expanded ? Image.PreserveAspectFit
+                                                : Image.PreserveAspectCrop
                         sourceSize.height: carousel.decodeH
                     }
                     AnimatedImage {
@@ -587,7 +614,8 @@ Window {
                         playing: cell.previewing
                         cache: false
                         asynchronous: true
-                        fillMode: Image.PreserveAspectCrop
+                        fillMode: cell.expanded ? Image.PreserveAspectFit
+                                                : Image.PreserveAspectCrop
                     }
                     Text {
                         anchors.centerIn: parent
@@ -597,19 +625,21 @@ Window {
                         font.family: Theme.fontFamily
                         font.pixelSize: 24
                     }
-                }
 
-                MouseArea {
-                    anchors.fill: cardVisual
-                    cursorShape: Qt.PointingHandCursor
-                    // A single click focuses the card (never hover); double-click
-                    // applies and exits.
-                    onClicked: {
-                        carousel.currentIndex = cell.index
-                        if (win.searching)
-                            win.exitSearchKeep()
+                    // Inside the card so hit-testing follows the shear transform
+                    // (an outside sibling would keep the unsheared rectangle).
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        // A single click focuses the card (never hover);
+                        // double-click applies and exits.
+                        onClicked: {
+                            carousel.currentIndex = cell.index
+                            if (win.searching)
+                                win.exitSearchKeep()
+                        }
+                        onDoubleClicked: { carousel.currentIndex = cell.index; win.applyAndExit() }
                     }
-                    onDoubleClicked: { carousel.currentIndex = cell.index; win.applyAndExit() }
                 }
             }
         }
