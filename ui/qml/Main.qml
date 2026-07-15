@@ -284,13 +284,12 @@ Window {
             }
         }
 
-        // ---- Carousel: a horizontal strip of portrait wallcards ----
+        // ---- Carousel: an infinite loop of portrait wallcards ----
         // The wallpapers are the content; chrome recedes. Cards are portrait so
-        // a handful read at once; the focused card widens to a landscape card
-        // (after a short settle delay) so its wallpaper — almost always 16:9 —
-        // is legible. Centered in the free vertical band below the top prompt;
-        // height-capped so a few cards fit across, not a wall.
-        ListView {
+        // a handful read at once; the focused card widens to the wallpaper's
+        // own aspect (after a short settle delay) so it reads in full. The
+        // strip wraps: there is no first/last card, always a next/previous.
+        PathView {
             id: carousel
             // Centered band with side margins (not full-bleed): ~85% of the
             // screen wide, ~40% tall — the strip floats on the bare desktop.
@@ -299,35 +298,42 @@ Window {
             width: Math.round(parent.width * 0.85)
             height: Math.min(Math.round(win.height * 0.40), 480)
             clip: true
-            orientation: ListView.Horizontal
-            spacing: 10
             // No drag/flick: movement is keyboard + wheel only, so the wheel
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
 
-            // Centring is done by hand (see _center + settleTimer), not via a
-            // highlight range. A highlight range re-derives contentX from
-            // currentIndex on the view's own layout schedule: ApplyRange only snaps
-            // to centre on a user-driven index change (so the applied card opened
-            // off-centre until the first arrow key), and StrictlyEnforceRange snaps
-            // every frame but rewrites currentIndex to whatever card is in the
-            // centre slot mid-layout (the "opens on a random wallpaper" bug). With
-            // NoHighlightRange currentIndex is never touched; the only cost is the
-            // initial-layout contentX clobber that settleTimer absorbs (see _prime).
-            highlightRangeMode: ListView.NoHighlightRange
-            // Gap between a centred card and the view edge. Card i centres at
-            // contentX = i*step - edgePad; _center clamps that to the real content
-            // range, so cards near the ends pin to the edge instead of centring
-            // (no end spacers — the strip never scrolls past its first/last card).
-            readonly property real edgePad: Math.max(0, (width - portraitW) / 2)
-            // Smooth one-card slide on navigation, enabled only after the initial
-            // jump to the applied card (see _prime) so launch snaps there instantly
-            // instead of sweeping from the index-0 baseline.
+            // The strip is an infinite loop: PathView is circular, so
+            // increment/decrement wrap and there is no first/last card. The
+            // current card is *always* dead-center (StrictlyEnforceRange on a
+            // 0.5 highlight), which retires the hand-rolled centering the old
+            // ListView needed (edge pinning, contentX re-assertion, settle
+            // timer) — a loop has no edges to pin to.
+            preferredHighlightBegin: 0.5
+            preferredHighlightEnd: 0.5
+            highlightRangeMode: PathView.StrictlyEnforceRange
+            movementDirection: PathView.Shortest
             readonly property int navMoveDuration: 220
-            property bool _animateScroll: false
-            Behavior on contentX {
-                enabled: carousel._animateScroll
-                NumberAnimation { duration: carousel.navMoveDuration; easing.type: Easing.OutCubic }
+            // Snap (not sweep) to the applied card on launch; animate after.
+            property bool _primed: false
+            highlightMoveDuration: _primed ? navMoveDuration : 0
+
+            // Slot geometry. PathView has no `spacing`: the step is baked into
+            // the path length — `slots` evenly spaced stops of `step` px each,
+            // centered on the view. Odd count so the center slot is symmetric;
+            // +2 beyond the viewport so items enter/leave the path outside the
+            // clipped band (no visible pop-in at the seam). pathItemCount also
+            // bounds live delegates, replacing the old cacheBuffer.
+            readonly property real step: portraitW + 10
+            readonly property int slots: 2 * Math.ceil((width / step + 2) / 2) + 1
+            pathItemCount: slots
+            cacheItemCount: 2
+            path: Path {
+                startX: carousel.width / 2 - carousel.slots * carousel.step / 2
+                startY: carousel.height / 2
+                PathLine {
+                    x: carousel.width / 2 + carousel.slots * carousel.step / 2
+                    y: carousel.height / 2
+                }
             }
 
             // Mouse wheel over the strip steps through wallpapers (one per
@@ -340,9 +346,6 @@ Window {
                         carousel.decrementCurrentIndex()
                 }
             }
-            // Keep a small off-screen buffer so a few neighbours pre-decode
-            // without holding the whole library's bitmaps in RAM.
-            cacheBuffer: 700
 
             // Card geometry. Portrait by default; the focused card first *pops*
             // (full height + a touch wider, instantly) then widens to the full
@@ -364,89 +367,18 @@ Window {
             readonly property int decodeH: Math.round(cardH * 2)
 
             model: controller.model
-            currentIndex: 0
 
             // Open on the wallpaper that's already applied (appliedRow() returns
             // its row, or 0 when there's no saved state / it left the folder).
             // The model is fully populated before this view is built (the
-            // Controller scans in its constructor), so the only moving part is the
-            // view's own layout. Prime once it has *measured* geometry, gated on
-            // contentWidth > 0 (only non-zero after the first layout pass sized the
-            // delegates). Latched so a later resize/model reset can't yank it back.
-            //
-            // Why not a highlight range: StrictlyEnforceRange centres reliably but
-            // *rewrites currentIndex* to whatever card lands in the centre slot
-            // during the startup layout transient (the applied row silently becomes
-            // a neighbour — the long-standing "opens on a random wallpaper" bug).
-            // NoHighlightRange leaves currentIndex alone, at the cost that the view
-            // resets contentX to its content-start once or twice during initial
-            // layout, clobbering the offset _center sets. settleTimer re-asserts the
-            // centred offset across those passes until it holds — see below.
-            property bool _primed: false
-            function _prime(): void {
-                if (_primed || count <= 0 || width <= 0 || contentWidth <= 0)
-                    return
-                _primed = true
-                currentIndex = controller.appliedRow()
-                _center()
-                settleTimer.restart()
+            // Controller scans in its constructor), so the index is valid here;
+            // _primed flips a frame later so the initial positioning snaps
+            // instead of sweeping from index 0.
+            Component.onCompleted: {
+                if (count > 0)
+                    currentIndex = controller.appliedRow()
+                Qt.callLater(() => _primed = true)
             }
-            // Place the current card centred *within the content range*. Every
-            // layout slot is exactly portraitW (the focused card's pop/expand
-            // overflows its slot without resizing it), so card i sits at content-x
-            // originX + i*step and wants contentX = originX + i*step - edgePad.
-            // originX is NOT a constant 0: the view rebases its content origin as
-            // delegates are created/destroyed while scrolling, shifting every
-            // item's content-x with it — dropping it from the formula pins the
-            // current card to the view start (contentX lands step-aligned on the
-            // card itself). The clamp to [originX, originX + contentWidth - width]
-            // is load-bearing: the first and last couple of cards can't centre
-            // without scrolling past the strip's ends, so they pin to the
-            // start/end edge instead — by design.
-            // _desiredX is remembered so settleTimer can detect a layout clobber.
-            property real _desiredX: 0
-            function _center(): void {
-                if (count <= 0 || width <= 0)
-                    return
-                const step = portraitW + spacing
-                const target = originX + currentIndex * step - edgePad
-                const maxX = originX + Math.max(0, contentWidth - width)
-                _desiredX = Math.max(originX, Math.min(target, maxX))
-                contentX = _desiredX
-            }
-            // Bounded startup settle, NOT an idle loop: it runs only right after
-            // priming and stops the instant the centred offset holds (or after a
-            // hard cap). The view clobbers contentX back to its content-start during
-            // the first few layout passes; re-assert each frame until it sticks for
-            // 3 consecutive frames, then enable the navigation slide and stop. There
-            // is no clean QML signal for "initial layout settled", so this is the
-            // event-driven alternative to racing a single fixed delay.
-            Timer {
-                id: settleTimer
-                interval: 16
-                repeat: true
-                property int stable: 0
-                property int ticks: 0
-                onTriggered: {
-                    ticks++
-                    if (Math.abs(carousel.contentX - carousel._desiredX) < 0.5) {
-                        if (++stable >= 3) { stop(); carousel._animateScroll = true }
-                    } else {
-                        stable = 0
-                        carousel._center()
-                    }
-                    if (ticks > 40) { stop(); carousel._animateScroll = true }
-                }
-            }
-            onCurrentIndexChanged: _center()
-            // An origin rebase mid-flight shifts every item; re-derive the offset.
-            onOriginXChanged: _center()
-            onContentWidthChanged: _prime()
-            onWidthChanged: { _prime(); _center() }
-            // After a removal the numeric currentIndex is unchanged but names
-            // the next card, so no currentIndexChanged fires — re-centre here.
-            onCountChanged: { _prime(); _center() }
-            Component.onCompleted: _prime()
 
             delegate: Item {
                 id: cell
@@ -455,16 +387,17 @@ Window {
                 required property string kind
                 required property string thumbnail
                 required property string preview
-                property bool selected: ListView.isCurrentItem
+                property bool selected: PathView.isCurrentItem
                 property bool expanded: false   // full landscape widen (after the settle delay)
 
-                // The layout slot stays portrait, so the strip spacing and the
-                // centred-scroll maths (see _center / ApplyRange) never change.
-                // The card *visual* grows beyond this box — symmetrically when it
-                // can, nudged inward when the cell is pinned at a view edge (see
-                // cardVisual.x) so the expansion never overflows off-screen — and
-                // the focused cell is z-lifted to draw above the neighbours it
-                // overflows.
+                // Cached instances that fell off the path must not paint.
+                visible: PathView.onPath
+
+                // The layout slot stays portrait, so the loop's slot step never
+                // changes. The card *visual* grows beyond this box symmetrically
+                // (the focused cell is always screen-centered in a loop, so the
+                // growth can never run off-screen) and is z-lifted to draw above
+                // the neighbours it overflows.
                 height: carousel.cardH
                 width: carousel.portraitW
                 z: selected ? 1 : 0
@@ -495,8 +428,8 @@ Window {
                 // Expanded width follows the wallpaper's real aspect so the
                 // whole image is visible, corners included. The thumbnail's
                 // implicit size carries the source aspect (decode preserves
-                // it); 16:9 until it's ready. Clamped so ultrawide art stays
-                // on-screen — the Fit fillMode letterboxes the clamped case.
+                // it); 16:9 until it's ready. Clamped so rare ultrawide art
+                // stays on-screen (that case still crops at the sides).
                 readonly property real imgAspect:
                     thumb.status === Image.Ready && thumb.implicitHeight > 0
                         ? thumb.implicitWidth / thumb.implicitHeight : 16 / 9
@@ -507,23 +440,11 @@ Window {
                 Rectangle {
                     id: cardVisual
                     anchors.verticalCenter: parent.verticalCenter
-                    // Centred in the slot so growth overflows symmetrically. The
-                    // focused card only is clamped to the viewport: when its cell
-                    // sits pinned at a view edge (first/last cards no longer centre
-                    // — see _center), the expansion overflow is pushed inward
-                    // instead of clipping off-screen. Idle cards must NOT clamp —
-                    // clamping would drag off-screen cached delegates back into
-                    // view, piling them up at the edges.
-                    x: {
-                        const centred = (cell.width - width) / 2
-                        if (!cell.selected)
-                            return centred
-                        const cellViewX = cell.x - carousel.contentX
-                        const minX = -cellViewX
-                        const maxX = carousel.width - cellViewX - width
-                        return maxX < minX ? centred
-                                           : Math.max(minX, Math.min(centred, maxX))
-                    }
+                    // Centred in the slot so growth overflows symmetrically. No
+                    // viewport clamp needed: the focused cell is always
+                    // screen-centered (loop) and expandedW is capped to 75% of
+                    // the band, so the expansion can't run off-screen.
+                    x: (cell.width - width) / 2
                     // Idle size by default; the two states drive the pop, then the widen.
                     width: carousel.portraitW
                     height: carousel.idleH
