@@ -318,20 +318,29 @@ Window {
             highlightMoveDuration: _primed ? navMoveDuration : 0
 
             // Slot geometry. PathView has no `spacing`: the step is baked into
-            // the path length — `slots` evenly spaced stops of `step` px each,
-            // centered on the view. Odd count so the center slot is symmetric;
-            // +2 beyond the viewport so items enter/leave the path outside the
-            // clipped band (no visible pop-in at the seam). pathItemCount also
-            // bounds live delegates, replacing the old cacheBuffer.
-            readonly property real step: portraitW + 10
+            // the path length — evenly spaced stops of `step` px each, centered
+            // on the view. Cards sit nearly glued (6px). `slots` is odd so the
+            // center slot is symmetric, +2 beyond the viewport so items
+            // enter/leave the path outside the clipped band (no visible pop-in
+            // at the seam). pathItemCount also bounds live delegates, replacing
+            // the old cacheBuffer.
+            //
+            // The path length must track the *lesser* of slots and count:
+            // PathView spreads all items across the whole path whenever
+            // count <= pathItemCount, so a small library on a slots-sized path
+            // would fan out with big gaps (and stray partial cards at the band
+            // edges). Shrinking the path to count*step keeps the spacing at
+            // exactly one step — a compact centered strip.
+            readonly property real step: portraitW + 6
             readonly property int slots: 2 * Math.ceil((width / step + 2) / 2) + 1
-            pathItemCount: slots
+            readonly property int pathSlots: count > 0 ? Math.min(slots, count) : slots
+            pathItemCount: pathSlots
             cacheItemCount: 2
             path: Path {
-                startX: carousel.width / 2 - carousel.slots * carousel.step / 2
+                startX: carousel.width / 2 - carousel.pathSlots * carousel.step / 2
                 startY: carousel.height / 2
                 PathLine {
-                    x: carousel.width / 2 + carousel.slots * carousel.step / 2
+                    x: carousel.width / 2 + carousel.pathSlots * carousel.step / 2
                     y: carousel.height / 2
                 }
             }
