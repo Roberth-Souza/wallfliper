@@ -24,7 +24,8 @@ QtObject {
     readonly property color muted: "#8a8a8a"
     readonly property color faint: "#4a4a4a"
 
-    // Horizontal shear factor for idle wallcards (noctalia-style slats). The
+    // Horizontal shear factor for idle wallcards (noctalia-style slats).
+    // Negative leans the top edge to the right; positive to the left. The
     // focused card animates back to 0 (straight).
-    readonly property real cardSlant: 0.18
+    readonly property real cardSlant: -0.18
 }

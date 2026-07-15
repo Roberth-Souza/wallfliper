@@ -594,14 +594,15 @@ Window {
                         visible: cell.thumbnail !== "" && !cell.previewing
                         asynchronous: true
                         cache: true
-                        // Portrait cards crop a landscape wallpaper to a centre
-                        // slice. The expanded card matches the source aspect, so
-                        // Fit shows the full image (and letterboxes instead of
-                        // cropping when expandedW was clamped). Decode by card
-                        // height (the crop's constraining axis) so it's sharp
-                        // without over-decoding the cropped-away width.
-                        fillMode: cell.expanded ? Image.PreserveAspectFit
-                                                : Image.PreserveAspectCrop
+                        // Always Crop: the image stays scaled to the card
+                        // height, so the widen *reveals* more of it instead of
+                        // re-fitting (a Fit switch mid-expand visibly rescales
+                        // the image — looks like a reload). The expanded card
+                        // matches the source aspect, so at rest Crop shows the
+                        // whole image anyway; only the rare clamped ultrawide
+                        // still crops. Decode by card height (the constraining
+                        // axis) so it's sharp without over-decoding.
+                        fillMode: Image.PreserveAspectCrop
                         sourceSize.height: carousel.decodeH
                     }
                     AnimatedImage {
@@ -614,8 +615,7 @@ Window {
                         playing: cell.previewing
                         cache: false
                         asynchronous: true
-                        fillMode: cell.expanded ? Image.PreserveAspectFit
-                                                : Image.PreserveAspectCrop
+                        fillMode: Image.PreserveAspectCrop
                     }
                     Text {
                         anchors.centerIn: parent
