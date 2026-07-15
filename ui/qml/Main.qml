@@ -313,6 +313,8 @@ Window {
             highlightRangeMode: PathView.StrictlyEnforceRange
             movementDirection: PathView.Shortest
             readonly property int navMoveDuration: 220
+            // Time budget per extra card in a multi-step glide; the speed cap.
+            readonly property int glidePerStep: 100
             // Snap (not sweep) to the applied card on launch; animate after.
             property bool _primed: false
             highlightMoveDuration: _primed ? navMoveDuration : 0
@@ -334,10 +336,10 @@ Window {
                 glide.stop()
                 glide.from = offset
                 glide.to = target
-                // Longer glides get a bit more time, so a fast burst reads as
-                // one accelerated sweep instead of a teleport.
-                glide.duration = Math.min(500, navMoveDuration
-                    + 60 * Math.max(0, Math.abs(target - offset) - 1))
+                // Duration grows with distance so the sweep speed is capped at
+                // ~1 card per glidePerStep ms no matter how fast the burst.
+                glide.duration = navMoveDuration
+                    + glidePerStep * Math.max(0, Math.abs(target - offset) - 1)
                 glide.restart()
             }
             // Direct focus (click, filter reset): kill any glide first so it
