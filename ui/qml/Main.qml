@@ -182,10 +182,10 @@ Window {
                 }
                 else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left) {
                     win.exitSearchKeep()
-                    carousel.scrollBy(-1)
+                    carousel.scrollBy(-1, event.isAutoRepeat)
                 } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Right) {
                     win.exitSearchKeep()
-                    carousel.scrollBy(1)
+                    carousel.scrollBy(1, event.isAutoRepeat)
                 } else if (event.text === "/")
                     win.exitSearchClear()  // press `/` again to leave and clear
                 else if (event.key === Qt.Key_Backspace) {
@@ -227,10 +227,10 @@ Window {
             }
             else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
                      || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
-                carousel.scrollBy(-1)
+                carousel.scrollBy(-1, event.isAutoRepeat)
             else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J
                      || event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
-                carousel.scrollBy(1)
+                carousel.scrollBy(1, event.isAutoRepeat)
             else
                 return
             event.accepted = true
@@ -325,14 +325,26 @@ Window {
             // Instead, navigation glides the view `offset`; with
             // StrictlyEnforceRange the view re-derives currentIndex from
             // whatever card is at the 0.5 highlight, so the outline is always
-            // the centered card, even mid-glide. Rapid wheel notches / key
-            // repeats accumulate into one continuous re-targeted glide.
+            // the centered card, even mid-glide.
             // Qt normalizes assigned offsets mod count, so gliding across the
             // wrap seam (negative / > count values mid-animation) is safe.
-            function scrollBy(steps: int): void {
-                if (count <= 0)
+            //
+            // `chained` marks continuous input (key auto-repeat, wheel
+            // notches): while it keeps the running direction, each step
+            // extends the same glide (one accelerated sweep). A *discrete*
+            // command — a fresh key press, or any reversal — must obey
+            // immediately instead of piling onto a far-away target: it
+            // re-targets from the live offset to one card past the nearest
+            // one, so the strip decelerates right away and lands where the
+            // user asked.
+            function scrollBy(steps: int, chained: bool): void {
+                if (count <= 0 || steps === 0)
                     return
-                const target = (glide.running ? glide.to : offset) - steps
+                const sameDir = glide.running
+                    && Math.sign(glide.to - glide.from) === Math.sign(-steps)
+                const target = (chained && sameDir)
+                    ? glide.to - steps
+                    : Math.round(offset) - steps
                 glide.stop()
                 glide.from = offset
                 glide.to = target
@@ -387,10 +399,13 @@ Window {
             // notch), re-centering on the new focus. Hover alone never moves it.
             WheelHandler {
                 onWheel: (event) => {
+                    // Wheel notches are always "chained": a burst reads as one
+                    // sweep; a reverse notch still obeys instantly (direction
+                    // check in scrollBy).
                     if (event.angleDelta.y < 0 || event.angleDelta.x < 0)
-                        carousel.scrollBy(1)
+                        carousel.scrollBy(1, true)
                     else if (event.angleDelta.y > 0 || event.angleDelta.x > 0)
-                        carousel.scrollBy(-1)
+                        carousel.scrollBy(-1, true)
                 }
             }
 
