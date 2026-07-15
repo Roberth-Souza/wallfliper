@@ -76,7 +76,7 @@ Window {
     property bool searching: false
     onSearchTextChanged: {
         controller.setFilter(searchText)
-        carousel.currentIndex = carousel.count > 0 ? 0 : -1
+        carousel.focusIndex(carousel.count > 0 ? 0 : -1)
     }
 
     // Space: apply but keep the overlay open, so you can audition wallpapers
@@ -182,10 +182,10 @@ Window {
                 }
                 else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left) {
                     win.exitSearchKeep()
-                    carousel.decrementCurrentIndex()
+                    carousel.scrollBy(-1)
                 } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Right) {
                     win.exitSearchKeep()
-                    carousel.incrementCurrentIndex()
+                    carousel.scrollBy(1)
                 } else if (event.text === "/")
                     win.exitSearchClear()  // press `/` again to leave and clear
                 else if (event.key === Qt.Key_Backspace) {
@@ -227,10 +227,10 @@ Window {
             }
             else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
                      || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
-                carousel.decrementCurrentIndex()
+                carousel.scrollBy(-1)
             else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J
                      || event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
-                carousel.incrementCurrentIndex()
+                carousel.scrollBy(1)
             else
                 return
             event.accepted = true
@@ -317,6 +317,42 @@ Window {
             property bool _primed: false
             highlightMoveDuration: _primed ? navMoveDuration : 0
 
+            // Smooth navigation: stepping currentIndex directly moves the
+            // outline to the new card *before* the strip catches up (offset
+            // animates behind), so fast scrolling parks the outline off-center.
+            // Instead, navigation glides the view `offset`; with
+            // StrictlyEnforceRange the view re-derives currentIndex from
+            // whatever card is at the 0.5 highlight, so the outline is always
+            // the centered card, even mid-glide. Rapid wheel notches / key
+            // repeats accumulate into one continuous re-targeted glide.
+            // Qt normalizes assigned offsets mod count, so gliding across the
+            // wrap seam (negative / > count values mid-animation) is safe.
+            function scrollBy(steps: int): void {
+                if (count <= 0)
+                    return
+                const target = (glide.running ? glide.to : offset) - steps
+                glide.stop()
+                glide.from = offset
+                glide.to = target
+                // Longer glides get a bit more time, so a fast burst reads as
+                // one accelerated sweep instead of a teleport.
+                glide.duration = Math.min(500, navMoveDuration
+                    + 60 * Math.max(0, Math.abs(target - offset) - 1))
+                glide.restart()
+            }
+            // Direct focus (click, filter reset): kill any glide first so it
+            // can't keep driving offset against the index-driven snap.
+            function focusIndex(i: int): void {
+                glide.stop()
+                currentIndex = i
+            }
+            NumberAnimation {
+                id: glide
+                target: carousel
+                property: "offset"
+                easing.type: Easing.OutCubic
+            }
+
             // Slot geometry. PathView has no `spacing`: the step is baked into
             // the path length — evenly spaced stops of `step` px each, centered
             // on the view. Cards sit nearly glued (6px). `slots` is odd so the
@@ -350,9 +386,9 @@ Window {
             WheelHandler {
                 onWheel: (event) => {
                     if (event.angleDelta.y < 0 || event.angleDelta.x < 0)
-                        carousel.incrementCurrentIndex()
+                        carousel.scrollBy(1)
                     else if (event.angleDelta.y > 0 || event.angleDelta.x > 0)
-                        carousel.decrementCurrentIndex()
+                        carousel.scrollBy(-1)
                 }
             }
 
@@ -564,11 +600,11 @@ Window {
                         // A single click focuses the card (never hover);
                         // double-click applies and exits.
                         onClicked: {
-                            carousel.currentIndex = cell.index
+                            carousel.focusIndex(cell.index)
                             if (win.searching)
                                 win.exitSearchKeep()
                         }
-                        onDoubleClicked: { carousel.currentIndex = cell.index; win.applyAndExit() }
+                        onDoubleClicked: { carousel.focusIndex(cell.index); win.applyAndExit() }
                     }
                 }
             }
