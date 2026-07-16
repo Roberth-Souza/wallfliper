@@ -96,6 +96,10 @@ class WallpaperModel(QAbstractListModel):
         self.endRemoveRows()
         return entry
 
+    def entries(self) -> list[WallpaperEntry]:
+        """Loaded entries (read-only use; the model owns the list)."""
+        return self._entries
+
     def entry_at(self, index: _Index) -> WallpaperEntry | None:
         if not index.isValid() or not (0 <= index.row() < len(self._entries)):
             return None
