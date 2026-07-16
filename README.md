@@ -36,7 +36,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 - **Lightweight & on-demand** — launches when you call it, exits cleanly, and never idles in the background. Rendering is handed to detached daemons.
 - **Restore on login** — remembers your last wallpaper so a video survives a reboot.
 - **Color-scheme integration** — tells noctalia / matugen / wallust / pywal to re-theme your system from the new wallpaper.
-- **Riced to taste** — backdrop opacity, made for a `layerrule = blur` compositor.
+- **Riced to taste** — flat, borderless TUI look; the surface is transparent except the floating bar and the cards, so your desktop stays visible while you browse.
 
 ## 🖥️ Supported compositors
 
@@ -127,40 +127,35 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `↑ ↓ ← →` · `h j k l` · `w a s d` | Move selection |
 | `/` | Start searching — then type to filter |
 | `Backspace` | Edit the filter (empty filter → leave search) |
-| `i` · `v` | Toggle the **image** / **video** filter (also clickable buttons) |
+| `i` · `v` · `e` | Show **images only** / **videos only** / **everything** |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
 | Double-click | Apply and close |
-| Click outside the panel | Close |
-| ⚙ (gear) | Open settings |
+| Click outside the cards | Close |
+| `/config` + `Enter` | Open settings |
 
 Applying an image stops any running video wallpaper — there's only ever one wallpaper at a time.
 
 ### ⚙️ Settings
 
-Click the gear (or it's keyboard-driven: `j/k` move · `←/→` change · `Enter` select · `Esc` close):
+Type `/config` while searching and hit `Enter` (keyboard-driven: `j/k` move · `Enter`
+select · `Esc` close):
 
-- **background** — backdrop darkness / opacity
 - **folder** — choose your wallpaper directory (via your `xdg-desktop-portal` file chooser)
 
 ## 🌫️ Blur (optional, Hyprland)
 
-Hyprland blurs *windows* by default, but **not** layer-shell surfaces — so Wallfliper
-starts out unblurred. To get the frosted-glass panel, add a layer rule for its
-`wallfliper` namespace:
+There is no backdrop panel — only the floating bar is painted with alpha. To frost it,
+add a layer rule for the `wallfliper` namespace (`ignore_alpha` keeps the transparent
+desktop area unblurred):
 
 ```lua
 hl.layer_rule({ name = "wallfliper", match = { namespace = "wallfliper" }, blur = true, ignore_alpha = 0.5 })
 ```
 
-Lower the **background** opacity in Settings to actually see the blur through it.
-
 Verify the namespace any time with `hyprctl layers` while Wallfliper is open.
-
-Other `wlr-layer-shell` compositors expose their own blur mechanism (or none) — consult
-their docs; Wallfliper just provides the transparent surface for them to blur.
 
 ## 🔁 Restore on login
 
@@ -243,7 +238,8 @@ still frame extracted with `ffmpeg`.
 | Video cards show `▶` instead of a frame | Install `ffmpeg` (thumbnails/previews are optional). |
 | Settings folder picker doesn't open | Install an `xdg-desktop-portal` backend (e.g. `xdg-desktop-portal-gtk` or `-termfilechooser`). |
 
-the app still runs and tells you in the status bar what to install.
+The app still runs without the optional tools — missing dependencies are reported in the
+terminal at startup, and `--check` lists them with install hints.
 
 ## 📄 License
 
