@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QSize,
     QSortFilterProxyModel,
     QThreadPool,
+    QTimer,
     Signal,
     Slot,
 )
@@ -26,6 +27,7 @@ from PySide6.QtGui import QGuiApplication
 
 from core.backends import BackendError, MissingDependencyError, get_backend
 from core.backends.base import ImageTransition
+from core.colors import PALETTE, PALETTE_NAMES, ColorLoader, ColorLookup
 from core.firstframe import first_frame
 from core.integrations import notify_color_tools
 from core.library import scan
@@ -34,7 +36,7 @@ from core.previews import PreviewLoader
 from core.state import Config, load_config, load_state, save_config, save_state
 from core.thumbnails import ThumbnailLoader
 
-from .model import KIND_ROLE, NAME_ROLE, WallpaperModel
+from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, WallpaperModel
 
 # Fit-within box for cached card thumbnails. The carousel supersamples each card
 # (decodes at ~2x its on-screen height) for crispness, so the cache needs enough
@@ -49,17 +51,22 @@ _Index = QModelIndex | QPersistentModelIndex
 
 
 class _WallpaperFilterProxy(QSortFilterProxyModel):
-    """Combine a case-insensitive name substring filter with a kind filter.
+    """AND a name substring filter with a kind filter and a color filter.
 
-    The built-in fixed-string filter only matches a single role, but the
-    image/video toggles need a second predicate, so filterAcceptsRow applies
-    both. An empty kind set means "all kinds" (no filtering by kind).
+    The built-in fixed-string filter only matches a single role, so
+    filterAcceptsRow applies all three predicates. An empty kind set means
+    "all kinds"; an empty color string means "all colors". Color membership
+    comes from the injected lookup (core.colors.ColorLoader) — a plain dict
+    read, no I/O; a row not classified yet is hidden and streams in when its
+    classification lands (the Controller throttles the re-filtering).
     """
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._text = ""
         self._kinds: frozenset[str] = frozenset()
+        self._color = ""
+        self._colors_of: ColorLookup = lambda _path: None
 
     def set_text(self, text: str) -> None:
         text = text.lower()
@@ -72,11 +79,23 @@ class _WallpaperFilterProxy(QSortFilterProxyModel):
             self._kinds = kinds
             self.invalidateFilter()
 
+    def set_color(self, color: str) -> None:
+        if color != self._color:
+            self._color = color
+            self.invalidateFilter()
+
+    def set_color_lookup(self, lookup: ColorLookup) -> None:
+        self._colors_of = lookup
+
     def filterAcceptsRow(self, source_row: int, source_parent: _Index) -> bool:
         model = self.sourceModel()
         index = model.index(source_row, 0, source_parent)
         if self._kinds and model.data(index, KIND_ROLE) not in self._kinds:
             return False
+        if self._color:
+            colors = self._colors_of(model.data(index, PATH_ROLE))
+            if not colors or self._color not in colors:
+                return False
         if self._text:
             name = model.data(index, NAME_ROLE) or ""
             if self._text not in name.lower():
@@ -125,6 +144,7 @@ class Controller(QObject):
     folderPickerClosed = Signal()
     folderManualRequested = Signal()
     kindFilterChanged = Signal()
+    colorFilterChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -140,6 +160,21 @@ class Controller(QObject):
         # Exclusive kind filter: "all" | "image" | "video". One mode at a time;
         # each keybind sets its mode idempotently (no per-kind toggling).
         self._kind_filter = "all"
+        # Exclusive color filter, same shape as kind: "all" or a palette
+        # bucket. Classification is lazy — swept once per reload, and only
+        # when the color strip first opens (ensureColorIndex), so launches
+        # that never touch it do no color work.
+        self._color_filter = "all"
+        self._color_swept = False
+        self._color_loader = ColorLoader(self)
+        self._proxy.set_color_lookup(self._color_loader.colors_for)
+        self._color_loader.ready.connect(self._on_colors_ready)
+        # While classifications stream in, re-filter at most every interval
+        # instead of once per wallpaper.
+        self._color_refilter = QTimer(self)
+        self._color_refilter.setSingleShot(True)
+        self._color_refilter.setInterval(100)
+        self._color_refilter.timeout.connect(self._proxy.invalidateFilter)
 
         self._backend = get_backend()
         self._config: Config = load_config()
@@ -173,6 +208,16 @@ class Controller(QObject):
         """Active kind filter: "all", "image", or "video"."""
         return self._kind_filter
 
+    @Property(str, notify=colorFilterChanged)
+    def colorFilter(self) -> str:
+        """Active color filter: "all" or a palette bucket name."""
+        return self._color_filter
+
+    @Property("QVariantList", constant=True)
+    def colorPalette(self) -> list[dict]:
+        """Fixed palette for the QML swatch strip: [{name, hex}, …] in order."""
+        return [{"name": name, "hex": hex_} for name, hex_ in PALETTE]
+
     # --- slots called from QML ------------------------------------------
 
     @Slot(str)
@@ -189,6 +234,42 @@ class Controller(QObject):
         self._kind_filter = kind
         self._proxy.set_kinds(frozenset() if kind == "all" else frozenset({kind}))
         self.kindFilterChanged.emit()
+
+    @Slot(str)
+    def setColorFilter(self, color: str) -> None:
+        """Show only wallpapers matching `color` (palette bucket), or "all".
+
+        Exclusive and idempotent, mirroring setKindFilter.
+        """
+        if color == self._color_filter:
+            return
+        if color != "all" and color not in PALETTE_NAMES:
+            return
+        self._color_filter = color
+        self._proxy.set_color("" if color == "all" else color)
+        self.colorFilterChanged.emit()
+
+    @Slot()
+    def ensureColorIndex(self) -> None:
+        """Kick color classification for the library, once per reload.
+
+        QML calls this when the color strip opens. Cached files (colors.json
+        hit) cost a stat each; the rest classify on the bounded pool and the
+        grid streams in via the throttled re-filter.
+        """
+        if self._color_swept:
+            return
+        self._color_swept = True
+        for entry in self._model.entries():
+            try:
+                thumb = self._loader.cache_path(entry)
+            except OSError:
+                thumb = None
+            self._color_loader.request(entry, thumb)
+
+    def _on_colors_ready(self, _path: str, _colors: list) -> None:
+        if self._color_filter != "all" and not self._color_refilter.isActive():
+            self._color_refilter.start()
 
     @Slot(result=int)
     def appliedRow(self) -> int:
@@ -356,6 +437,11 @@ class Controller(QObject):
         self._model.set_entries(entries)
         self._warmed.clear()
         self._warming.clear()
+        # New library, new sweep — but only re-kick it right away if a color
+        # filter is live (otherwise unclassified entries would stay hidden).
+        self._color_swept = False
+        if self._color_filter != "all":
+            self.ensureColorIndex()
         # No count/folder chrome in the front; clear any stale apply message.
         self._set_status("")
 

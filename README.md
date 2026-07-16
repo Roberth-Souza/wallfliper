@@ -128,6 +128,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `/` | Start searching — then type to filter |
 | `Backspace` | Edit the filter (empty filter → leave search) |
 | `i` · `v` · `e` | Show **images only** / **videos only** / **everything** |
+| `c` | **Color filter** — a swatch strip opens below the cards; move to filter live, `Enter` keeps it, `Esc`/`c` clears |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |

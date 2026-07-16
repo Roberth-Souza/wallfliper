@@ -53,6 +53,8 @@ Window {
         onClicked: {
             if (win.searching)
                 win.exitSearchClear()
+            else if (win.colorMode)
+                win.exitColorClear()
             else
                 Qt.quit()
         }
@@ -106,6 +108,41 @@ Window {
         win.searchText = ""
     }
 
+    // Color filter mode: `c` shows the swatch strip below the carousel and
+    // routes the nav keys to it; moving the cursor applies the filter live
+    // (audition-style, like Space for wallpapers). Enter confirms and keeps
+    // the filter; Esc / `c` again cancels and clears it. The strip stays
+    // visible while a filter is active — it doubles as the filter indicator.
+    property bool colorMode: false
+    // "all" clears, rendered as a dark swatch with a × — then the fixed
+    // palette in Controller order. colorPalette is constant, evaluated once.
+    readonly property var colorEntries:
+        [{ name: "all", hex: "#161616" }].concat(controller.colorPalette)
+
+    function enterColorMode() {
+        controller.ensureColorIndex()
+        win.colorMode = true
+    }
+
+    function exitColorKeep() {
+        win.colorMode = false
+    }
+
+    function exitColorClear() {
+        win.colorMode = false
+        controller.setColorFilter("all")
+    }
+
+    // Step the swatch cursor; the cursor *is* the active filter (live apply),
+    // so there is a single selection language: the white border.
+    function moveColor(step: int): void {
+        let i = colorEntries.findIndex(e => e.name === controller.colorFilter)
+        if (i < 0)
+            i = 0
+        i = Math.min(Math.max(i + step, 0), colorEntries.length - 1)
+        controller.setColorFilter(colorEntries[i].name)
+    }
+
     // Lazy manual-entry fallback: shown only when no portal chooser answers.
     property bool folderEntryOpen: false
 
@@ -156,10 +193,12 @@ Window {
         focus: true
 
         Keys.onPressed: (event) => {
-            // Esc always exits immediately, in either mode.
+            // Esc always exits immediately, in any mode.
             if (event.key === Qt.Key_Escape) {
                 if (win.searching)
                     win.exitSearchClear()
+                else if (win.colorMode)
+                    win.exitColorClear()
                 else
                     Qt.quit()
                 event.accepted = true
@@ -203,6 +242,25 @@ Window {
                 return
             }
 
+            if (win.colorMode) {
+                // Color mode: the nav keys move the swatch cursor, applying
+                // the filter live. Enter confirms (filter kept), `c` cancels.
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                    win.exitColorKeep()
+                else if (event.text === "c")
+                    win.exitColorClear()
+                else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
+                         || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
+                    win.moveColor(-1)
+                else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J
+                         || event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
+                    win.moveColor(1)
+                else
+                    return  // let unhandled keys propagate
+                event.accepted = true
+                return
+            }
+
             // Normal mode: the keys are commands.
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                 win.applyAndExit()
@@ -216,6 +274,8 @@ Window {
                 controller.setKindFilter("video")   // videos only
             else if (event.text === "e")
                 controller.setKindFilter("all")     // everything
+            else if (event.text === "c")
+                win.enterColorMode()                // color filter strip
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
                 // Shift+D: delete the selected wallpaper file permanently (no
                 // confirmation). Must precede the nav branch below, which
@@ -620,6 +680,78 @@ Window {
                                 win.exitSearchKeep()
                         }
                         onDoubleClicked: { carousel.focusIndex(cell.index); win.applyAndExit() }
+                    }
+                }
+            }
+        }
+
+        // ---- Color filter strip: a framed bar of mini sheared swatch-cards
+        // below the carousel, mirroring the floating bar above it. On-demand
+        // chrome: hidden until `c` opens color mode, kept while a filter is
+        // active (it is the filter's indicator), gone when cleared. The
+        // swatches reuse the wallcard language — same shear, same white
+        // selection border — because they *are* miniature wallpaper cards:
+        // the one deliberate color exception in the greyscale chrome.
+        Rectangle {
+            id: colorBar
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: carousel.bottom
+            anchors.topMargin: 24
+            width: swatchRow.implicitWidth + 28
+            height: swatchRow.implicitHeight + 20
+            color: Theme.bg
+            border.color: Theme.frame
+            border.width: Theme.frameWidth
+            visible: win.colorMode || controller.colorFilter !== "all"
+
+            // Swallow clicks so they don't fall through to dismissArea.
+            MouseArea { anchors.fill: parent }
+
+            Row {
+                id: swatchRow
+                anchors.centerIn: parent
+                spacing: 8
+
+                Repeater {
+                    model: win.colorEntries
+                    delegate: Rectangle {
+                        id: swatch
+                        required property var modelData
+                        width: 26
+                        height: 40
+                        color: modelData.hex
+                        border.color: modelData.name === controller.colorFilter
+                            ? Theme.frame : "transparent"
+                        border.width: Theme.frameWidth
+                        antialiasing: true
+
+                        // Same shear as the wallcards (about the vertical
+                        // centre, so the swatch leans in place).
+                        readonly property real slant: Theme.cardSlant
+                        transform: Matrix4x4 {
+                            matrix: Qt.matrix4x4(
+                                1, swatch.slant, 0, -swatch.slant * swatch.height / 2,
+                                0, 1, 0, 0,
+                                0, 0, 1, 0,
+                                0, 0, 0, 1)
+                        }
+
+                        // The "all" swatch clears: typography, not an icon.
+                        Text {
+                            anchors.centerIn: parent
+                            visible: swatch.modelData.name === "all"
+                            text: "×"
+                            color: Theme.muted
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                        }
+
+                        // Inside the swatch so hit-testing follows the shear.
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: controller.setColorFilter(swatch.modelData.name)
+                        }
                     }
                 }
             }
