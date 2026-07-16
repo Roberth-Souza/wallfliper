@@ -516,15 +516,13 @@ Window {
                     clip: true
                     antialiasing: true
 
-                    // Idle cards lean as sheared parallelograms (noctalia-style
-                    // slats); focus straightens the card. The shear is uniform
-                    // across idle cards, so their edges stay parallel and the
-                    // strip spacing reads unchanged. Shear about the vertical
-                    // centre so the card leans in place instead of walking.
-                    property real slant: cell.selected ? 0 : Theme.cardSlant
-                    Behavior on slant {
-                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
-                    }
+                    // All cards lean as sheared parallelograms (noctalia-style
+                    // slats), the focused one included, so the strip reads as
+                    // one continuous set of slats. The shear is uniform, so
+                    // edges stay parallel and spacing reads unchanged. Shear
+                    // about the vertical centre so the card leans in place
+                    // instead of walking.
+                    readonly property real slant: Theme.cardSlant
                     transform: Matrix4x4 {
                         matrix: Qt.matrix4x4(
                             1, cardVisual.slant, 0, -cardVisual.slant * cardVisual.height / 2,
