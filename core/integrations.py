@@ -22,7 +22,10 @@ from pathlib import Path
 
 from .state import WallpaperKind, cache_dir
 
-_NOCTALIA = 'qs -c noctalia-shell ipc call wallpaper set {path} ""'
+# noctalia v5+ ships a native binary with its own IPC CLI; v4 and earlier is a
+# quickshell config reached through `qs`. Detected by binary, newest first.
+_NOCTALIA_V5 = "noctalia msg wallpaper-set {path}"
+_NOCTALIA_V4 = 'qs -c noctalia-shell ipc call wallpaper set {path} ""'
 
 
 def notify_color_tools(path: Path, kind: WallpaperKind, hook: str = "") -> None:
@@ -41,10 +44,12 @@ def notify_color_tools(path: Path, kind: WallpaperKind, hook: str = "") -> None:
     if hook:
         _spawn(prefix + hook.replace("{path}", quoted))
         return
-    if shutil.which("qs"):
-        # noctalia regenerates colors even when its own wallpaper rendering is
-        # disabled; if it isn't running the call fails fast and is swallowed.
-        _spawn(prefix + _NOCTALIA.format(path=quoted))
+    # noctalia regenerates colors even when its own wallpaper rendering is
+    # disabled; if it isn't running the call fails fast and is swallowed.
+    if shutil.which("noctalia"):
+        _spawn(prefix + _NOCTALIA_V5.format(path=quoted))
+    elif shutil.which("qs"):
+        _spawn(prefix + _NOCTALIA_V4.format(path=quoted))
 
 
 def _color_source(path: Path, kind: WallpaperKind) -> tuple[Path | None, str]:

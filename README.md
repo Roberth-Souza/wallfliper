@@ -213,7 +213,8 @@ No background daemon of our own — rendering is handled by `swww-daemon` / `mpv
 
 After applying a wallpaper, Wallfliper notifies external color tools so your **system**
 color scheme regenerates from it (best-effort, never blocks). It auto-detects
-[noctalia-shell](https://github.com/noctalia-dev) if running; for everything else set
+[noctalia](https://github.com/noctalia-dev) if installed — v5+ (`noctalia msg`) or the
+older quickshell-based noctalia-shell (`qs ... ipc`); for everything else set
 `color_hook` in `~/.config/wallfliper/config.json` (`{path}` is substituted):
 
 ```json
