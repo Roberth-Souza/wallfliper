@@ -19,7 +19,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 <div align="center">
 
 
-![Demonstração do Wallfliper](https://github.com/user-attachments/assets/4a80909d-18da-41b8-9179-185537829c67)
+![Demonstração do Wallfliper](https://github.com/user-attachments/assets/3a3bb80b-213b-46e7-9703-ea75c17b1330)
 
 
 </div>
