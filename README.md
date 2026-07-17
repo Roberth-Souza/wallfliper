@@ -146,18 +146,6 @@ select · `Esc` close):
 
 - **folder** — choose your wallpaper directory (via your `xdg-desktop-portal` file chooser)
 
-## 🌫️ Blur (optional, Hyprland)
-
-There is no backdrop panel — only the floating bar is painted with alpha. To frost it,
-add a layer rule for the `wallfliper` namespace (`ignore_alpha` keeps the transparent
-desktop area unblurred):
-
-```lua
-hl.layer_rule({ name = "wallfliper", match = { namespace = "wallfliper" }, blur = true, ignore_alpha = 0.5 })
-```
-
-Verify the namespace any time with `hyprctl layers` while Wallfliper is open.
-
 ## 🔁 Restore on login
 
 Wallfliper saves the last-applied wallpaper to `~/.config/wallfliper/state.json`.
