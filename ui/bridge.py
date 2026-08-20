@@ -25,7 +25,12 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QGuiApplication
 
-from core.backends import BackendError, MissingDependencyError, get_backend
+from core.backends import (
+    BackendError,
+    MissingDependencyError,
+    get_backend,
+    transitions,
+)
 from core.backends.base import ImageTransition
 from core.colors import PALETTE, PALETTE_NAMES, ColorLoader, ColorLookup
 from core.firstframe import first_frame
@@ -320,12 +325,15 @@ class Controller(QObject):
         if entry is None:
             return
         try:
-            # Fixed random transition; fps follows the display refresh so the
-            # switch animation is as smooth as the monitor can show (a per-user
-            # transition picker may return later). Video reuses it for the
-            # seamless lead-in: swww animates to the clip's first frame, then
-            # mpvpaper takes over.
-            transition = ImageTransition(fps=self._transition_fps())
+            # fps follows the display refresh so the switch animation is as
+            # smooth as the monitor can show. Video reuses the same transition
+            # for the seamless lead-in: swww animates to the clip's first
+            # frame, then mpvpaper takes over.
+            transition = ImageTransition(
+                type=self._transition_name(),
+                duration=self._config.transition_duration,
+                fps=self._transition_fps(),
+            )
             if entry.kind == "video":
                 self._backend.set_video(entry.path, transition)
             else:
@@ -448,6 +456,15 @@ class Controller(QObject):
     def _set_status(self, text: str) -> None:
         self._status = text
         self.statusChanged.emit()
+
+    def _transition_name(self) -> str:
+        """Configured switch animation, or "random" if it names nothing known.
+
+        A typo in config.json degrades to the default pool instead of handing
+        swww a flag value it rejects, which would fail the whole apply.
+        """
+        name = self._config.transition
+        return name if transitions.is_known(name) else "random"
 
     @staticmethod
     def _transition_fps() -> int:

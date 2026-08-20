@@ -12,17 +12,16 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import shutil
 import signal
 import subprocess
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
 
 from ..firstframe import first_frame
 from ..state import cache_dir
+from . import transitions as tr
 from .base import (
     BackendError,
     ImageTransition,
@@ -32,38 +31,6 @@ from .base import (
 
 
 _SWWW_CANDIDATES = ("swww", "awww")
-
-# swww's animated transitions minus 'fade'. We resolve 'random' from this pool
-# ourselves rather than passing swww's own 'random', which can land on fade.
-# Fade finishes visually well before the transition duration, so the seamless
-# video lead-in (which keeps mpvpaper paused for the full duration) would sit on
-# a frozen frame after the animation is already done. The instant 'none'/'simple'
-# switches are excluded too — these are the actual animations.
-_RANDOM_TRANSITIONS = (
-    "wipe",
-    "wave",
-    "grow",
-    "center",
-    "outer",
-    "left",
-    "right",
-    "top",
-    "bottom",
-)
-
-
-def _resolve_random(transition: ImageTransition) -> ImageTransition:
-    """Resolve a 'random' transition to a concrete type (fade excluded); others pass through.
-
-    Centralizes the pick so the swww `--transition-*` flags and the seamless
-    lead-in's timing read the *same* concrete type. Resolving 'random'
-    independently in each place could desync them — e.g. an instant type chosen
-    for the flags while the driver still waits the full duration to unpause,
-    leaving mpv frozen on frame 0 after the (instant) switch already finished.
-    """
-    if transition.type == "random":
-        return replace(transition, type=random.choice(_RANDOM_TRANSITIONS))
-    return transition
 
 
 # mpv options passed through to mpvpaper via -o. Tuned for robust, quiet, looping
@@ -131,19 +98,36 @@ class WlrootsBackend(WallpaperBackend):
         self._stop_video()
         tool = self._resolve(_SWWW_CANDIDATES)
         self._ensure_daemon(tool)
+        if transition is not None:
+            transition = tr.resolve(transition)
         self._run([tool, "img", *self._transition_args(transition), str(path)])
 
     @staticmethod
     def _transition_args(transition: ImageTransition | None) -> list[str]:
-        """Translate a transition choice into swww `--transition-*` flags."""
+        """Translate a resolved transition into swww `--transition-*` flags.
+
+        Expects a transition already run through `tr.resolve` (the callers do
+        it, so the flags and the video driver's timing describe the same
+        animation); resolving again here would re-roll a random preset.
+        """
         if transition is None:
             return []
-        # Resolve 'random' here (excluding fade) instead of letting swww pick.
-        ttype = _resolve_random(transition).type
-        args = ["--transition-type", ttype, "--transition-fps", str(transition.fps)]
+        args = [
+            "--transition-type", transition.type,
+            "--transition-fps", str(transition.fps),
+        ]
         # swww ignores duration for the instant 'none'/'simple' switch.
-        if ttype not in ("none", "simple"):
+        if transition.type not in ("none", "simple"):
             args += ["--transition-duration", str(transition.duration)]
+        # Preset parameters; unset ones keep swww's defaults.
+        if transition.angle is not None:
+            args += ["--transition-angle", f"{transition.angle:g}"]
+        if transition.pos is not None:
+            args += ["--transition-pos", transition.pos]
+        if transition.bezier is not None:
+            args += ["--transition-bezier", transition.bezier]
+        if transition.wave is not None:
+            args += ["--transition-wave", transition.wave]
         return args
 
     def set_video(self, path: Path, transition: ImageTransition | None = None) -> None:
@@ -211,9 +195,9 @@ class WlrootsBackend(WallpaperBackend):
             self._ensure_daemon(swww)
         except BackendError:
             return False  # daemon won't start → fall back to a plain hard cut
-        # Resolve 'random' once so the swww flags below and the driver's unpause
-        # timing agree on the same concrete transition (see _resolve_random).
-        transition = _resolve_random(transition)
+        # Resolve the preset once so the swww flags below and the driver's
+        # unpause timing agree on the same concrete animation (see tr.resolve).
+        transition = tr.resolve(transition)
         # Dispatch the transition *before* retiring the old video. swww img returns
         # as soon as the daemon accepts the frame (it animates asynchronously), so
         # killing mpvpaper right after reveals a wipe that is already painting — no
