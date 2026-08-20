@@ -29,6 +29,7 @@ from core.backends.base import ImageTransition
 from core.firstframe import first_frame
 from core.library import scan
 from core.state import load_config, load_state
+from ui import shaders
 
 
 def _library(kind: str) -> list[Path]:
@@ -72,6 +73,14 @@ def main() -> int:
     args = ap.parse_args()
 
     names = args.presets or list(tr.PRESETS)
+    # Shader transitions are painted by the GUI's own layer-shell surface, so
+    # they cannot be driven from a headless script like this one.
+    shader = [n for n in names if shaders.is_shader(n)]
+    if shader:
+        sys.exit(
+            f"{', '.join(shader)}: shader transition, only runs in the GUI "
+            '(set it in config.json as "transition")'
+        )
     unknown = [n for n in names if not tr.is_known(n)]
     if unknown:
         sys.exit(f"unknown: {', '.join(unknown)}\nknown: {', '.join(tr.PRESETS)}")
