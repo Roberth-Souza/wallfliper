@@ -108,3 +108,62 @@ def resolve(transition: ImageTransition) -> ImageTransition:
 def is_known(name: str) -> bool:
     """True if `name` is something `resolve` understands (preset or swww type)."""
     return name in PRESETS or name in _SWWW_TYPES or name == "random"
+
+
+# swww's own default easing, used when a transition carries no bezier of its
+# own (a raw type name, or None).
+SWWW_DEFAULT_BEZIER = ".54,0,.34,.99"
+
+# How complete the animation must look before something may cover it. Circular
+# transitions get a stricter bar: their progress drives a *radius*, so 98% of
+# the radius still leaves ~4% of the screen — a ring at the edges — showing the
+# old image, which pops. Linear sweeps map progress straight to covered area.
+_COVER_THRESHOLD = 0.98
+_CIRCULAR_THRESHOLD = 0.995
+_CIRCULAR_TYPES = frozenset({"grow", "outer", "center", "any"})
+
+_CURVE_SAMPLES = 512
+
+
+def _bezier_point(x1: float, y1: float, x2: float, y2: float, s: float) -> tuple[float, float]:
+    """Point on the cubic bezier (0,0)-(x1,y1)-(x2,y2)-(1,1) at parameter `s`."""
+    inv = 1.0 - s
+    a, b, c = 3.0 * inv * inv * s, 3.0 * inv * s * s, s * s * s
+    return a * x1 + b * x2 + c, a * y1 + b * y2 + c
+
+
+def _parse_bezier(bezier: str | None) -> tuple[float, float, float, float]:
+    try:
+        x1, y1, x2, y2 = (float(v) for v in (bezier or SWWW_DEFAULT_BEZIER).split(","))
+    except ValueError:
+        x1, y1, x2, y2 = (float(v) for v in SWWW_DEFAULT_BEZIER.split(","))
+    return x1, y1, x2, y2
+
+
+def completion_fraction(transition: ImageTransition) -> float:
+    """Fraction of the duration after which the animation *looks* finished.
+
+    swww spreads the switch over the full duration, but the easing decides how
+    much of the movement has happened at any point: 'chop' does three quarters
+    of its travel in the last fifth of the time, while 'iris' is all but done a
+    third of the way in. Returns the earliest time (as a fraction of the
+    duration) at which the eye can no longer tell the animation from its end
+    state.
+
+    This is what the video lead-in schedules against: mpvpaper covers the whole
+    screen the moment its surface maps, so launching it before this point chops
+    the animation off mid-movement and snaps to the final image. Sampled rather
+    than solved — the curve is monotonic and 512 steps resolve far finer than a
+    frame at any sane duration.
+    """
+    x1, y1, x2, y2 = _parse_bezier(transition.bezier)
+    target = (
+        _CIRCULAR_THRESHOLD
+        if transition.type in _CIRCULAR_TYPES
+        else _COVER_THRESHOLD
+    )
+    for step in range(_CURVE_SAMPLES + 1):
+        x, y = _bezier_point(x1, y1, x2, y2, step / _CURVE_SAMPLES)
+        if y >= target:
+            return min(max(x, 0.0), 1.0)
+    return 1.0

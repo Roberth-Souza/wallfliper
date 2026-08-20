@@ -66,13 +66,18 @@ _DAEMON_TIMEOUT_S = 3.0
 # new video is up before the old goes away — otherwise swww's background would
 # flash through the gap. ~0.8s is comfortably past typical mpv startup.
 _VIDEO_SWAP_DELAY_S = 0.8
-# Seamless lead-in: how far before the transition ends mpvpaper is launched, so
-# its cold-start overlaps the animation instead of stacking after it. Roughly
-# mpv's startup cost — too small leaves a residual delay before motion, too
-# large maps mpv (frozen on frame 0) over the transition's last frames. The
-# detached driver gates the unpause on the full duration regardless, so motion
-# never begins before the animation visually ends.
-_MPV_PREWARM_S = 0.6
+# Seamless lead-in: the most we will launch mpvpaper *before* the transition
+# ends, so its cold-start overlaps the animation instead of stacking after it.
+# Roughly mpv's startup cost; a larger value buys nothing once mpv is up before
+# the animation finishes.
+#
+# This is only a ceiling — the actual lead-in is clamped by the easing (see
+# _prewarm_for). mpvpaper covers the whole screen the instant its surface maps,
+# with the transition's endpoint frame, so launching it while the animation is
+# still visibly moving truncates it: the switch runs smoothly and then snaps to
+# the final image. How early that is safe depends entirely on the curve, which
+# is why the cap alone is not enough.
+_MPV_PREWARM_MAX_S = 0.6
 _SEAMLESS_DRIVER = Path(__file__).resolve().parent.parent / "seamless.py"
 
 
@@ -223,7 +228,7 @@ class WlrootsBackend(WallpaperBackend):
                 "fallback": self._mpvpaper_cmd(mpvpaper, path),
                 "sock": sock,
                 "duration": duration,
-                "prewarm": _MPV_PREWARM_S,
+                "prewarm": self._prewarm_for(transition, duration),
             }
         )
         # The driver runs in its own process: it launches mpvpaper paused on the
@@ -236,6 +241,18 @@ class WlrootsBackend(WallpaperBackend):
         )
         self._pending_sock = sock
         return True
+
+    @staticmethod
+    def _prewarm_for(transition: ImageTransition, duration: float) -> float:
+        """How early mpvpaper may be launched without cutting the animation short.
+
+        Never earlier than the point where the easing has visually finished
+        (`tr.completion_fraction`), and never more than the cap — an eased-out
+        transition like 'iris' is done a third of the way in and can hide most
+        of mpv's cold start, while a back-loaded one like 'chop' moves until the
+        last frame and must not be covered at all.
+        """
+        return min(_MPV_PREWARM_MAX_S, duration * (1.0 - tr.completion_fraction(transition)))
 
     def _cancel_pending_transition(self) -> None:
         """Kill a still-pending seamless driver so a newer apply wins.
