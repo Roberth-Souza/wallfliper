@@ -22,7 +22,7 @@ _APP = "wallfliper"
 # Persisted settings keys read back in load_config (kept in one place so the
 # loader and the dataclass can't drift). Unknown keys in an existing
 # config.json (e.g. the retired background_opacity) are silently ignored.
-_CONFIG_KEYS = ("wallpaper_dir", "color_hook")
+_CONFIG_KEYS = ("wallpaper_dir", "color_hook", "transition", "transition_duration")
 
 
 def config_dir() -> Path:
@@ -57,6 +57,11 @@ class Config:
     # wallpaper path. Empty = auto: notify noctalia-shell if it's running
     # (it derives its color scheme from the wallpaper but doesn't watch swww).
     color_hook: str = ""
+    # Switch animation: a preset name from core/backends/transitions.py, a raw
+    # swww transition type, or "random" (a different preset every apply).
+    # Unknown names fall back to "random" at apply time.
+    transition: str = "random"
+    transition_duration: float = 1.0
 
     @property
     def wallpaper_path(self) -> Path | None:

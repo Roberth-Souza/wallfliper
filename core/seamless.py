@@ -5,12 +5,17 @@ which exits right after apply. The job: make a video wallpaper come alive the
 instant the swww transition ends, with no cold-start delay tacked on.
 
 How: the backend kicks off a swww transition to a still of the video's first
-frame. This driver launches mpvpaper *paused on that same first frame* partway
-through the transition — so mpv pays its cold-start cost while the animation is
-still playing, and because it's frozen on frame 0 (identical to the transition's
-endpoint) it can map on top of swww without showing motion or cutting the wipe.
-Then it unpauses over mpv's IPC socket the moment the transition duration has
-elapsed and mpv is reachable, so motion begins exactly on cue.
+frame. This driver launches mpvpaper *paused on that same first frame* `prewarm`
+seconds before the transition ends, so mpv pays its cold-start cost while the
+animation is still playing. Then it unpauses over mpv's IPC socket the moment
+the transition duration has elapsed and mpv is reachable, so motion begins
+exactly on cue.
+
+`prewarm` is the backend's call, not a fixed head start: mpvpaper paints the
+whole screen the instant its surface maps, so it is only harmless once the
+animation has visually finished — which, for a back-loaded easing, is the very
+last frame. The backend derives it from the transition's curve; this driver
+just honours it.
 
 Stdlib only and self-contained (no core imports): it is executed as a plain
 script via `python core/seamless.py <json-config>`, with no package context.

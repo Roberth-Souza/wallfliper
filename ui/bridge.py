@@ -7,6 +7,7 @@ logic stays in `core/`; this is the thin seam between the QML view and Python.
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
@@ -20,22 +21,29 @@ from PySide6.QtCore import (
     QSortFilterProxyModel,
     QThreadPool,
     QTimer,
+    QUrl,
     Signal,
     Slot,
 )
 from PySide6.QtGui import QGuiApplication
 
-from core.backends import BackendError, MissingDependencyError, get_backend
+from core.backends import (
+    BackendError,
+    MissingDependencyError,
+    get_backend,
+    transitions,
+)
 from core.backends.base import ImageTransition
 from core.colors import PALETTE, PALETTE_NAMES, ColorLoader, ColorLookup
 from core.firstframe import first_frame
 from core.integrations import notify_color_tools
-from core.library import scan
+from core.library import WallpaperEntry, scan
 from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
 from core.state import Config, load_config, load_state, save_config, save_state
 from core.thumbnails import ThumbnailLoader
 
+from . import shaders
 from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, WallpaperModel
 
 # Fit-within box for cached card thumbnails. The carousel supersamples each card
@@ -145,6 +153,10 @@ class Controller(QObject):
     folderManualRequested = Signal()
     kindFilterChanged = Signal()
     colorFilterChanged = Signal()
+    # Ask Main.qml to paint the switch itself on a layer-shell surface, because
+    # the configured animation is a shader swww cannot do (see ui/shaders.py).
+    # Args: old wallpaper URL, new wallpaper URL, baked shader URL, duration ms.
+    shaderTransitionRequested = Signal(str, str, str, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -187,6 +199,9 @@ class Controller(QObject):
         self._warming: set[str] = set()  # extraction currently in flight
         self._warm_signals = _WarmSignals(self)
         self._warm_signals.finished.connect(self._on_warm_finished)
+        # Wallpaper waiting on a shader-painted switch: set when the surface is
+        # asked for, applied once it covers the screen, cleared when it is done.
+        self._pending_shader: WallpaperEntry | None = None
         self.reload()
 
     # --- properties exposed to QML --------------------------------------
@@ -313,19 +328,35 @@ class Controller(QObject):
         if ok:
             self._warmed.add(key)
 
-    @Slot(int)
-    def apply(self, proxy_row: int) -> None:
+    @Slot(int, result=bool)
+    def apply(self, proxy_row: int) -> bool:
+        """Apply the wallpaper at `proxy_row`.
+
+        Returns True when the switch is being painted by a shader surface and is
+        therefore still in flight: the caller must keep the process alive until
+        the surface reports back, or the wallpaper is never actually set.
+        """
         source = self._proxy.mapToSource(self._proxy.index(proxy_row, 0))
         entry = self._model.entry_at(source)
         if entry is None:
-            return
+            return False
+        # One draw per apply: the shader path and the swww fallback must be
+        # talking about the same animation.
+        name = self._pick_transition()
+        plan = self._shader_plan(entry, name)
+        if plan is not None:
+            # The surface paints the old wallpaper first and calls back (see
+            # shaderSurfaceReady); the real switch happens behind it, so the
+            # apply itself is deferred, not skipped.
+            self._pending_shader = entry
+            self.shaderTransitionRequested.emit(*plan)
+            return True
+        self._apply_entry(entry, self._swww_transition(name))
+        return False
+
+    def _apply_entry(self, entry: WallpaperEntry, transition: ImageTransition) -> None:
+        """Hand a wallpaper to the backend and record it, reporting failures."""
         try:
-            # Fixed random transition; fps follows the display refresh so the
-            # switch animation is as smooth as the monitor can show (a per-user
-            # transition picker may return later). Video reuses it for the
-            # seamless lead-in: swww animates to the clip's first frame, then
-            # mpvpaper takes over.
-            transition = ImageTransition(fps=self._transition_fps())
             if entry.kind == "video":
                 self._backend.set_video(entry.path, transition)
             else:
@@ -337,6 +368,55 @@ class Controller(QObject):
             self._set_status(f"⚠ {exc}")
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
+
+    def _shader_plan(self, entry: WallpaperEntry, name: str) -> tuple[str, str, str, int] | None:
+        """Arguments for a shader-painted switch, or None to use swww.
+
+        Requires everything the surface needs: a baked shader, a still image
+        on both ends (the shader blends two textures, and what is on screen for
+        a video is not a file it can sample), and a previous wallpaper that
+        still exists to blend *from*. Anything missing falls back to swww.
+        """
+        shader_url = shaders.url_for(name)
+        if shader_url is None or entry.kind != "image":
+            return None
+        previous = load_state()
+        if not previous.path or previous.kind != "image":
+            return None
+        old = Path(previous.path)
+        if not old.is_file():
+            return None
+        return (
+            QUrl.fromLocalFile(str(old)).toString(),
+            QUrl.fromLocalFile(str(entry.path)).toString(),
+            shader_url,
+            max(1, int(self._config.transition_duration * 1000)),
+        )
+
+    @Slot()
+    def shaderSurfaceReady(self) -> None:
+        """The surface is showing the old wallpaper: swap what's underneath.
+
+        Applying *now* rather than when the animation ends is what removes the
+        seam — by the time the surface is torn down the compositor already holds
+        the new wallpaper, so there is no frame where neither is on screen.
+        """
+        entry = self._pending_shader
+        if entry is None:
+            return
+        self._apply_entry(entry, ImageTransition(type="none"))
+
+    @Slot()
+    def shaderTransitionDone(self) -> None:
+        self._pending_shader = None
+
+    @Slot()
+    def shaderTransitionFailed(self) -> None:
+        """The surface could not draw (image decode failed): switch plainly."""
+        entry = self._pending_shader
+        self._pending_shader = None
+        if entry is not None:
+            self._apply_entry(entry, self._swww_transition())
 
     @Slot(int)
     def deleteWallpaper(self, proxy_row: int) -> None:
@@ -448,6 +528,35 @@ class Controller(QObject):
     def _set_status(self, text: str) -> None:
         self._status = text
         self.statusChanged.emit()
+
+    def _pick_transition(self) -> str:
+        """Resolve the configured animation to one concrete name, per apply.
+
+        "random" draws from the swww presets *and* the shader transitions, so
+        both kinds share a single pool. A typo in config.json degrades to that
+        pool instead of handing swww a flag value it rejects, which would fail
+        the whole apply.
+        """
+        name = self._config.transition
+        if not (transitions.is_known(name) or shaders.is_shader(name)):
+            name = "random"
+        if name != "random":
+            return name
+        pool = transitions.RANDOM_POOL + shaders.names()
+        return random.choice(pool) if pool else "random"
+
+    def _swww_transition(self, name: str) -> ImageTransition:
+        """The transition to hand swww, with fps matched to the display.
+
+        A shader name means nothing to swww, so a wallpaper the shader path
+        can't take (a video, or no previous still to blend from) falls back to
+        the random preset pool rather than to no animation at all.
+        """
+        return ImageTransition(
+            type="random" if shaders.is_shader(name) else name,
+            duration=self._config.transition_duration,
+            fps=self._transition_fps(),
+        )
 
     @staticmethod
     def _transition_fps() -> int:

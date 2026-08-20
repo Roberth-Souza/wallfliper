@@ -91,8 +91,66 @@ Window {
     function applyAndExit() {
         if (carousel.currentIndex < 0)
             return
-        controller.apply(carousel.currentIndex)
-        Qt.quit()
+        // A shader switch is painted by our own surface and only applies the
+        // wallpaper once that surface covers the screen — quitting here would
+        // kill it mid-flight and set nothing. Hide instead (which releases the
+        // keyboard grab, so it feels like closing) and exit when it lands.
+        if (controller.apply(carousel.currentIndex)) {
+            win.quitAfterTransition = true
+            win.visible = false
+        } else {
+            Qt.quit()
+        }
+    }
+
+    // --- shader-painted wallpaper switch ------------------------------------
+    // A separate layer-shell surface on the bottom layer, created per switch and
+    // destroyed with it (see TransitionSurface.qml). Held in a plain property
+    // rather than a Loader because it is a Window, not an Item.
+    property var transitionSurface: null
+    property bool quitAfterTransition: false
+
+    Component {
+        id: transitionComponent
+        TransitionSurface {}
+    }
+
+    function startShaderTransition(oldUrl, newUrl, shaderUrl, ms) {
+        win.dropTransitionSurface()
+        const surface = transitionComponent.createObject(null, {
+            oldSource: oldUrl,
+            newSource: newUrl,
+            shaderUrl: shaderUrl,
+            durationMs: ms
+        })
+        if (surface === null) {          // shader or component broken
+            controller.shaderTransitionFailed()
+            win.finishTransition()
+            return
+        }
+        surface.covered.connect(controller.shaderSurfaceReady)
+        surface.finished.connect(function() {
+            controller.shaderTransitionDone()
+            win.finishTransition()
+        })
+        surface.failed.connect(function() {
+            controller.shaderTransitionFailed()
+            win.finishTransition()
+        })
+        win.transitionSurface = surface
+    }
+
+    function finishTransition() {
+        win.dropTransitionSurface()
+        if (win.quitAfterTransition)
+            Qt.quit()
+    }
+
+    function dropTransitionSurface() {
+        if (win.transitionSurface !== null) {
+            win.transitionSurface.destroy()
+            win.transitionSurface = null
+        }
     }
 
     // Leave search input mode but keep the query and filtered grid (Enter or
@@ -185,6 +243,9 @@ Window {
         function onFolderPickerClosed() { win.closeFolderPicker() }
         // Portal missing or the request failed: fall back to manual entry.
         function onFolderManualRequested() { win.showFolderEntry() }
+        function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, ms) {
+            win.startShaderTransition(oldUrl, newUrl, shaderUrl, ms)
+        }
     }
 
     FocusScope {

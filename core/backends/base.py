@@ -18,15 +18,25 @@ from pathlib import Path
 class ImageTransition:
     """How swww animates the switch to a new still image.
 
-    `type` is one of swww's `--transition-type` values. Only images animate;
-    video has no equivalent. `type == "none"` is an instant switch (and ignores
-    duration, like swww does). Currently fixed to a random transition; a
-    per-user picker may come back later.
+    `type` is a preset name from `backends/transitions.py`, one of swww's raw
+    `--transition-type` values, or "random". Only images animate; video has no
+    equivalent. `type == "none"` is an instant switch (and ignores duration,
+    like swww does).
+
+    The remaining fields mirror swww's per-transition parameters and are only
+    meaningful for some types (angle: wipe/wave, pos: grow/outer, wave:
+    wave). None means "leave swww's default", which is what a raw type gets;
+    presets fill them in. Resolve a transition through `transitions.resolve`
+    before reading these — a preset name carries its parameters implicitly.
     """
 
     type: str = "random"
     duration: float = 1.0
     fps: int = 50
+    angle: float | None = None
+    pos: str | None = None
+    bezier: str | None = None
+    wave: str | None = None
 
 
 class BackendError(RuntimeError):
