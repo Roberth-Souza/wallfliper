@@ -7,6 +7,7 @@ logic stays in `core/`; this is the thin seam between the QML view and Python.
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
@@ -339,7 +340,10 @@ class Controller(QObject):
         entry = self._model.entry_at(source)
         if entry is None:
             return False
-        plan = self._shader_plan(entry)
+        # One draw per apply: the shader path and the swww fallback must be
+        # talking about the same animation.
+        name = self._pick_transition()
+        plan = self._shader_plan(entry, name)
         if plan is not None:
             # The surface paints the old wallpaper first and calls back (see
             # shaderSurfaceReady); the real switch happens behind it, so the
@@ -347,7 +351,7 @@ class Controller(QObject):
             self._pending_shader = entry
             self.shaderTransitionRequested.emit(*plan)
             return True
-        self._apply_entry(entry, self._swww_transition())
+        self._apply_entry(entry, self._swww_transition(name))
         return False
 
     def _apply_entry(self, entry: WallpaperEntry, transition: ImageTransition) -> None:
@@ -365,7 +369,7 @@ class Controller(QObject):
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
 
-    def _shader_plan(self, entry: WallpaperEntry) -> tuple[str, str, str, int] | None:
+    def _shader_plan(self, entry: WallpaperEntry, name: str) -> tuple[str, str, str, int] | None:
         """Arguments for a shader-painted switch, or None to use swww.
 
         Requires everything the surface needs: a baked shader, a still image
@@ -373,7 +377,6 @@ class Controller(QObject):
         a video is not a file it can sample), and a previous wallpaper that
         still exists to blend *from*. Anything missing falls back to swww.
         """
-        name = self._transition_name()
         shader_url = shaders.url_for(name)
         if shader_url is None or entry.kind != "image":
             return None
@@ -526,24 +529,29 @@ class Controller(QObject):
         self._status = text
         self.statusChanged.emit()
 
-    def _transition_name(self) -> str:
-        """Configured switch animation, or "random" if it names nothing known.
+    def _pick_transition(self) -> str:
+        """Resolve the configured animation to one concrete name, per apply.
 
-        A typo in config.json degrades to the default pool instead of handing
-        swww a flag value it rejects, which would fail the whole apply.
+        "random" draws from the swww presets *and* the shader transitions, so
+        both kinds share a single pool. A typo in config.json degrades to that
+        pool instead of handing swww a flag value it rejects, which would fail
+        the whole apply.
         """
         name = self._config.transition
-        known = transitions.is_known(name) or shaders.is_shader(name)
-        return name if known else "random"
+        if not (transitions.is_known(name) or shaders.is_shader(name)):
+            name = "random"
+        if name != "random":
+            return name
+        pool = transitions.RANDOM_POOL + shaders.names()
+        return random.choice(pool) if pool else "random"
 
-    def _swww_transition(self) -> ImageTransition:
+    def _swww_transition(self, name: str) -> ImageTransition:
         """The transition to hand swww, with fps matched to the display.
 
         A shader name means nothing to swww, so a wallpaper the shader path
         can't take (a video, or no previous still to blend from) falls back to
         the random preset pool rather than to no animation at all.
         """
-        name = self._transition_name()
         return ImageTransition(
             type="random" if shaders.is_shader(name) else name,
             duration=self._config.transition_duration,
