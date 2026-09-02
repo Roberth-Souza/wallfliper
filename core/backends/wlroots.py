@@ -48,6 +48,14 @@ _SWWW_CANDIDATES = ("swww", "awww")
 # scaled buffer when the output is torn down and recreated on wake. For the same
 # reason interpolation/tscale are omitted — they need continuous presentation
 # feedback, are pure GPU cost on a looping background, and stall across reconfig.
+#
+# panscan=1.0 makes mpv crop-to-fill instead of letterboxing an aspect that does
+# not match the output. It is what keeps the three renderers agreeing: swww fits
+# images by cropping (its default) and the transition surface uses
+# PreserveAspectCrop, so mpv's default letterbox was the odd one out — a video
+# whose aspect differs from the screen switched in on a cropped still and then
+# snapped to a letterboxed frame. A wallpaper fills the screen; black bars are
+# not a wallpaper.
 _MPV_OPTIONS = " ".join(
     [
         "loop",
@@ -57,6 +65,7 @@ _MPV_OPTIONS = " ".join(
         "--hwdec=auto",
         "--profile=high-quality",
         "--video-sync=audio",
+        "--panscan=1.0",
     ]
 )
 
