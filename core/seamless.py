@@ -17,6 +17,10 @@ animation has visually finished — which, for a back-loaded easing, is the very
 last frame. The backend derives it from the transition's curve; this driver
 just honours it.
 
+Unpausing is not fire-and-forget (see `_hold_playing`): `mpvpaper -p` races us
+and can pause the video right back, permanently, so the driver stays around
+long enough to see real playback before it exits.
+
 Stdlib only and self-contained (no core imports): it is executed as a plain
 script via `python core/seamless.py <json-config>`, with no package context.
 """
@@ -31,15 +35,72 @@ import subprocess
 import sys
 import time
 
-_UNPAUSE = json.dumps({"command": ["set_property", "pause", False]}).encode() + b"\n"
 _CONNECT_TIMEOUT_S = 0.5
+_REPLY_TIMEOUT_S = 0.5
 _UNPAUSE_DEADLINE_S = 4.0  # give up if mpv never comes up; better than blocking forever
+# How long to keep watching after the unpause. Must outlast mpvpaper's two-second
+# deadman switch (see _hold_playing), which is what steals the playback back.
+_CONFIRM_WINDOW_S = 3.0
+# Uninterrupted playback that counts as safe: once frames are flowing, mpvpaper's
+# deadman switch can no longer fire, so there is nothing left to watch for.
+_CONFIRM_STABLE_S = 1.0
+_POLL_INTERVAL_S = 0.15
 
 
-def _unpause(sock: str, not_before: float) -> bool:
-    """Send the unpause command once `not_before` has passed and mpv is reachable.
+class _Ipc:
+    """Minimal mpv JSON-IPC client over an open socket.
 
-    mpv creates the IPC socket during startup, so connection refused simply means
+    One command at a time, replies matched by `request_id`: mpv interleaves
+    asynchronous event lines with command replies on the same connection, so a
+    reader that takes the next line as its answer eventually reads an event
+    instead.
+    """
+
+    def __init__(self, conn: socket.socket) -> None:
+        self._conn = conn
+        self._buf = b""
+        self._next_id = 1
+
+    def command(self, *args: object) -> tuple[bool, object]:
+        """Run one mpv command; returns (succeeded, data)."""
+        request_id = self._next_id
+        self._next_id += 1
+        payload = json.dumps({"command": list(args), "request_id": request_id})
+        try:
+            self._conn.sendall(payload.encode() + b"\n")
+        except OSError:
+            return False, None
+        deadline = time.monotonic() + _REPLY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            line = self._readline()
+            if line is None:
+                return False, None
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("request_id") == request_id:
+                return msg.get("error") == "success", msg.get("data")
+        return False, None
+
+    def _readline(self) -> bytes | None:
+        """Next newline-terminated message, or None if the connection is done."""
+        while b"\n" not in self._buf:
+            try:
+                chunk = self._conn.recv(4096)
+            except OSError:
+                return None  # includes the read timeout
+            if not chunk:
+                return None
+            self._buf += chunk
+        line, _, self._buf = self._buf.partition(b"\n")
+        return line
+
+
+def _connect(sock: str, not_before: float) -> socket.socket | None:
+    """Open mpv's IPC socket once `not_before` has passed and mpv is reachable.
+
+    mpv creates the socket during startup, so connection refused simply means
     it isn't up yet — we retry. Gating on `not_before` guarantees motion never
     begins before the transition has visually finished, even if mpv mapped early.
     """
@@ -49,15 +110,83 @@ def _unpause(sock: str, not_before: float) -> bool:
         if wait > 0:
             time.sleep(min(0.02, wait))
             continue
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(_CONNECT_TIMEOUT_S)
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(_CONNECT_TIMEOUT_S)
-                client.connect(sock)
-                client.sendall(_UNPAUSE)
-            return True
+            conn.connect(sock)
         except OSError:
+            conn.close()
             time.sleep(0.03)
-    return False
+            continue
+        conn.settimeout(_REPLY_TIMEOUT_S)
+        return conn
+    return None
+
+
+def _start_playback(sock: str, not_before: float) -> bool:
+    """Unpause the waiting mpvpaper and make sure it stays playing.
+
+    False means the handoff is beyond saving (mpv unreachable, gone, or frozen
+    despite the retries) and the caller should fall back to a hard cut.
+    """
+    conn = _connect(sock, not_before)
+    if conn is None:
+        return False
+    with conn:
+        ipc = _Ipc(conn)
+        started, _ = ipc.command("set_property", "pause", False)
+        if not started:
+            return False
+        return _hold_playing(ipc)
+
+
+def _hold_playing(ipc: _Ipc) -> bool:
+    """Watch the freshly unpaused video until mpvpaper can no longer steal it.
+
+    `mpvpaper -p` runs a two-second deadman switch: if its surface got no frame
+    callback during a cycle, it decides the wallpaper is hidden and pauses mpv —
+    then blocks waiting for a frame before it will unpause again. A paused mpv
+    renders nothing, so that wait never ends. mpvpaper suppresses the check
+    while it believes mpv is paused, which is why the lead-in normally survives
+    it; the hole is the gap between our unpause landing and mpv's first rendered
+    frame. A cycle boundary falling inside that gap leaves the wallpaper frozen
+    on frame 0 forever.
+
+    Re-sending the unpause is enough to break it: mpv renders, mpvpaper's wait
+    ends, and it clears its own pause flag. So poll until playback has actually
+    been running for a moment — nothing can re-arm the deadman switch once
+    frames are flowing.
+
+    A legitimate auto-pause (a fullscreen window covering the wallpaper right
+    at apply) is indistinguishable from the bug here and gets fought for the
+    length of the window; the next deadman cycle re-pauses it once we are gone.
+    """
+    deadline = time.monotonic() + _CONFIRM_WINDOW_S
+    playing_since: float | None = None
+    last_pos: object = None
+    paused = True
+    while time.monotonic() < deadline:
+        time.sleep(_POLL_INTERVAL_S)
+        ok, paused = ipc.command("get_property", "pause")
+        if not ok:
+            return False
+        pos_ok, pos = ipc.command("get_property", "time-pos")
+        # Position *changed*, not increased: a short clip loops back to zero.
+        moving = pos_ok and last_pos is not None and pos != last_pos
+        last_pos = pos if pos_ok else None
+        now = time.monotonic()
+        if paused:
+            playing_since = None
+            ipc.command("set_property", "pause", False)
+        elif moving:
+            playing_since = playing_since if playing_since is not None else now
+            if now - playing_since >= _CONFIRM_STABLE_S:
+                return True
+        else:
+            playing_since = None
+    # Out of time. Only report a failed handoff if it is demonstrably stuck:
+    # unpaused but slow to produce frames is not worth a visible relaunch.
+    return not paused
 
 
 def main(argv: list[str]) -> int:
@@ -75,11 +204,11 @@ def main(argv: list[str]) -> int:
         start_new_session=True,
     )
     try:
-        if _unpause(cfg["sock"], not_before=start + cfg["duration"]):
+        if _start_playback(cfg["sock"], start + cfg["duration"]):
             return 0
-        # IPC never became reachable within the deadline: the paused mpvpaper
-        # would sit frozen on frame 0 forever. Kill it and relaunch a plain
-        # pause=no instance so a failed handoff degrades to a hard cut.
+        # The paused mpvpaper would sit frozen on frame 0 forever. Kill it and
+        # relaunch a plain pause=no instance so a failed handoff degrades to a
+        # hard cut.
         _recover_hard_cut(paused, cfg["fallback"])
         return 0
     finally:

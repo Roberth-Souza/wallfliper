@@ -155,8 +155,7 @@ class WlrootsBackend(WallpaperBackend):
         # Supersede any in-flight seamless lead-in *before* sampling the running
         # state, so old_pids includes a (paused) video the cancelled driver had
         # already mapped — it gets retired below instead of lingering frozen.
-        had_pending = self._pending_driver is not None
-        self._cancel_pending_transition()
+        had_pending = self._cancel_pending_transition()
         old_pids = self._mpvpaper_pids()
         # Already rendering this exact file → no-op, avoid stacking a 2nd GPU
         # decoder. Skipped when a driver was just cancelled: that mpvpaper is
@@ -272,8 +271,13 @@ class WlrootsBackend(WallpaperBackend):
         """
         return min(_MPV_PREWARM_MAX_S, duration * (1.0 - tr.completion_fraction(transition)))
 
-    def _cancel_pending_transition(self) -> None:
+    def _cancel_pending_transition(self) -> bool:
         """Kill a still-pending seamless driver so a newer apply wins.
+
+        Returns True when a driver was actually cancelled — i.e. an mpvpaper it
+        launched is now paused on frame 0 with nobody left to unpause it, so the
+        caller must redo the video instead of taking any "already playing this
+        file" shortcut.
 
         The driver brings its video up ~1s after apply (it overlaps mpv's
         cold-start with the swww animation, then unpauses over IPC). Without
@@ -294,12 +298,14 @@ class WlrootsBackend(WallpaperBackend):
         driver = self._pending_driver
         self._pending_driver = None
         self._pending_sock = None
+        cancelled = False
         record = self._take_pending_record()
         if record is not None:
             pid, sock = record
             # A recycled PID could be anything by now; only kill something that
             # is still one of our drivers.
             if self._is_seamless_driver(pid):
+                cancelled = True
                 try:
                     os.killpg(pid, signal.SIGKILL)
                 except OSError:
@@ -311,10 +317,20 @@ class WlrootsBackend(WallpaperBackend):
                 # only the pathname goes.
                 Path(sock).unlink(missing_ok=True)
         if driver is not None:
+            if driver.poll() is None:
+                cancelled = True
+                # Normally the record above already signalled this same pid; this
+                # covers the case where writing the record failed, leaving the
+                # handle as the only reference to a live driver.
+                try:
+                    os.killpg(driver.pid, signal.SIGKILL)
+                except OSError:
+                    pass
             try:
                 driver.wait(timeout=1.0)  # reap ours so they don't pile up as zombies
             except subprocess.TimeoutExpired:
                 pass  # SIGKILL is near-instant; never block apply on a stuck reap
+        return cancelled
 
     @staticmethod
     def _pending_path() -> Path:
