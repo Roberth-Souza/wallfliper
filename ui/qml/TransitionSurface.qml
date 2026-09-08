@@ -38,7 +38,13 @@ Window {
     visible: true
     width: Screen.width
     height: Screen.height
-    color: "black"
+    // Transparent, not black: the surface maps as soon as it is created, but the
+    // wallpapers behind the shader decode asynchronously, so for that whole
+    // decode there is nothing to draw. An opaque clear colour would be painted
+    // over swww in the meantime — a black blink before the animation. Clearing
+    // to nothing lets swww's current wallpaper, which is exactly the frame the
+    // animation starts from, show through until the first shaded frame lands.
+    color: "transparent"
 
     LayerShell.Window.scope: "wallfliper-transition"
     LayerShell.Window.layer: LayerShell.Window.LayerBottom
