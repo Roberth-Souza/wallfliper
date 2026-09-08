@@ -412,11 +412,14 @@ Window {
         // strip wraps: there is no first/last card, always a next/previous.
         PathView {
             id: carousel
-            // Centered band with side margins (not full-bleed): ~85% of the
-            // screen wide, ~40% tall — the strip floats on the bare desktop.
+            // Full-bleed band, ~40% tall: the strip spans the whole screen so
+            // the outermost cards are cut by the screen edge instead of ending
+            // in mid-air — the loop reads as running off both sides rather than
+            // as a centered widget. (A library smaller than the slot count
+            // still collapses to a compact centered strip; see pathSlots.)
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.verticalCenter: parent.verticalCenter
-            width: Math.round(parent.width * 0.85)
+            width: parent.width
             height: Math.min(Math.round(win.height * 0.40), 480)
             clip: true
             // No drag/flick: movement is keyboard + wheel only, so the wheel
@@ -618,15 +621,16 @@ Window {
                         ? thumb.implicitWidth / thumb.implicitHeight : 16 / 9
                 readonly property real expandedW:
                     Math.min(Math.round(carousel.cardH * imgAspect),
-                             Math.round(carousel.width * 0.75))
+                             Math.round(carousel.width * 0.64))
 
                 Rectangle {
                     id: cardVisual
                     anchors.verticalCenter: parent.verticalCenter
                     // Centred in the slot so growth overflows symmetrically. No
                     // viewport clamp needed: the focused cell is always
-                    // screen-centered (loop) and expandedW is capped to 75% of
-                    // the band, so the expansion can't run off-screen.
+                    // screen-centered (loop) and expandedW is capped to a
+                    // fraction of the screen, so the expansion can't run
+                    // off-screen.
                     x: (cell.width - width) / 2
                     // Idle size by default; the two states drive the pop, then the widen.
                     width: carousel.portraitW
