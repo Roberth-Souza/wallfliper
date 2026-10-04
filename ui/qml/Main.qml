@@ -337,6 +337,8 @@ Window {
                 controller.setKindFilter("all")     // everything
             else if (event.text === "c")
                 win.enterColorMode()                // color filter strip
+            else if (event.text === "r")
+                carousel.selectRandom()             // jump to a random card
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
                 // Shift+D: delete the selected wallpaper file permanently (no
                 // confirmation). Must precede the nav branch below, which
@@ -470,6 +472,7 @@ Window {
                     ? glide.to - steps
                     : Math.round(offset) - steps
                 glide.stop()
+                bounce.stop()
                 glide.from = offset
                 glide.to = target
                 // Duration grows with distance so the sweep speed is capped at
@@ -482,6 +485,7 @@ Window {
             // can't keep driving offset against the index-driven snap.
             function focusIndex(i: int): void {
                 glide.stop()
+                bounce.stop()
                 currentIndex = i
             }
             NumberAnimation {
@@ -489,6 +493,59 @@ Window {
                 target: carousel
                 property: "offset"
                 easing.type: Easing.OutCubic
+            }
+
+            // Random select: glide to a random other card, overshoot it and
+            // settle back. The overshoot is a fixed fraction of a card (not of
+            // the distance, as an OutBack easing would be) and stays under half
+            // a card, so the centered card never changes during the bounce.
+            readonly property real bounceOvershoot: 0.45
+            readonly property int bounceSettleDuration: 320
+            readonly property int randomMaxDuration: 650
+            // A random select always travels at least this far, and preferably
+            // to a card outside the visible strip, so it never reads as a nudge.
+            readonly property int randomMinSteps: 4
+            function selectRandom(): void {
+                if (count < 2)
+                    return
+                glide.stop()
+                bounce.stop()
+                // Circular strip: the farthest card is half a lap away either way.
+                const maxSteps = Math.floor(count / 2)
+                const offscreen = Math.ceil(width / (2 * step) + 0.5)
+                let minSteps = Math.max(randomMinSteps, offscreen)
+                if (minSteps > maxSteps)
+                    minSteps = Math.min(randomMinSteps, maxSteps)
+                const distance = minSteps
+                    + Math.floor(Math.random() * (maxSteps - minSteps + 1))
+                const steps = Math.random() < 0.5 ? -distance : distance
+                const target = Math.round(offset) - steps
+                bounceOut.from = offset
+                bounceOut.to = target - Math.sign(steps) * bounceOvershoot
+                bounceOut.duration = Math.min(randomMaxDuration,
+                    navMoveDuration + glidePerStep * Math.max(0, Math.abs(steps) - 1))
+                // Explicit `from`: by the time this step starts, Qt has wrapped the
+                // live offset mod count, so an implicit start value would sweep a
+                // whole lap back to the same card instead of the short settle.
+                bounceBack.from = bounceOut.to
+                bounceBack.to = target
+                bounce.restart()
+            }
+            SequentialAnimation {
+                id: bounce
+                NumberAnimation {
+                    id: bounceOut
+                    target: carousel
+                    property: "offset"
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    id: bounceBack
+                    target: carousel
+                    property: "offset"
+                    duration: carousel.bounceSettleDuration
+                    easing.type: Easing.InOutSine
+                }
             }
 
             // Slot geometry. PathView has no `spacing`: the step is baked into
