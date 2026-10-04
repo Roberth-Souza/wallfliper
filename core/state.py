@@ -68,8 +68,9 @@ class Config:
     # Unknown names fall back to "random" at apply time.
     transition: str = "random"
     transition_duration: float = 1.0
-    # Carousel focus style, toggled with `t`: "push" (the focused card shoves
-    # its neighbours aside) or "overlay" (it draws over them).
+    # Carousel style, cycled with `t`: "push" (the focused card shoves its
+    # neighbours aside), "overlay" (it draws over them) or "flow" (cover-flow
+    # arc in perspective).
     card_layout: str = "push"
 
     @property

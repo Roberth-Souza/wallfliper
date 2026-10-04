@@ -53,6 +53,8 @@ from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, WallpaperModel
 # sourceSize, so this sets the disk-cache ceiling, not per-card RAM.
 _THUMB_SIZE = QSize(1920, 1920)
 
+_CARD_LAYOUTS = ("push", "overlay", "flow")
+
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
 _Index = QModelIndex | QPersistentModelIndex
@@ -231,8 +233,9 @@ class Controller(QObject):
 
     @Property(str, notify=cardLayoutChanged)
     def cardLayout(self) -> str:
-        """Carousel focus style: "push" or "overlay" (unknown values read as push)."""
-        return "overlay" if self._config.card_layout == "overlay" else "push"
+        """Carousel style: "push", "overlay" or "flow" (unknown values read as push)."""
+        layout = self._config.card_layout
+        return layout if layout in _CARD_LAYOUTS else "push"
 
     @Property("QVariantList", constant=True)
     def colorPalette(self) -> list[dict]:
@@ -508,7 +511,7 @@ class Controller(QObject):
 
     @Slot(str)
     def setCardLayout(self, layout: str) -> None:
-        if layout not in ("push", "overlay") or layout == self.cardLayout:
+        if layout not in _CARD_LAYOUTS or layout == self.cardLayout:
             return
         self._config.card_layout = layout
         save_config(self._config)
