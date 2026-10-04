@@ -22,7 +22,13 @@ _APP = "wallfliper"
 # Persisted settings keys read back in load_config (kept in one place so the
 # loader and the dataclass can't drift). Unknown keys in an existing
 # config.json (e.g. the retired background_opacity) are silently ignored.
-_CONFIG_KEYS = ("wallpaper_dir", "color_hook", "transition", "transition_duration")
+_CONFIG_KEYS = (
+    "wallpaper_dir",
+    "color_hook",
+    "transition",
+    "transition_duration",
+    "card_layout",
+)
 
 
 def config_dir() -> Path:
@@ -62,6 +68,9 @@ class Config:
     # Unknown names fall back to "random" at apply time.
     transition: str = "random"
     transition_duration: float = 1.0
+    # Carousel focus style, toggled with `t`: "push" (the focused card shoves
+    # its neighbours aside) or "overlay" (it draws over them).
+    card_layout: str = "push"
 
     @property
     def wallpaper_path(self) -> Path | None:

@@ -32,6 +32,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 - **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
 - **Smooth transitions** — animated switches for both images and video
 - **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
+- **Two card layouts** — the focused card either pushes its neighbours aside or opens over them; `t` toggles, and the choice is remembered.
 - **Audition mode** — `Space` applies a wallpaper but keeps the picker open, so you can flip through options on your real desktop.
 - **Lightweight & on-demand** — launches when you call it, exits cleanly, and never idles in the background. Rendering is handed to detached daemons.
 - **Restore on login** — remembers your last wallpaper so a video survives a reboot.
@@ -132,6 +133,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `r` | **Select a random wallpaper** (doesn't apply it) |
+| `t` | Toggle card layout: focused card **pushes** neighbours aside / draws **over** them (remembered) |
 | `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
 | Double-click | Apply and close |
