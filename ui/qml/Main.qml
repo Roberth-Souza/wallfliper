@@ -648,8 +648,13 @@ Window {
             // would fan out with big gaps (and stray partial cards at the band
             // edges). Shrinking the path to count*step keeps the spacing at
             // exactly one step — a compact centered strip.
+            //
+            // `slots` is sized from the slim (narrowest) step, not the live one,
+            // so it stays put while `t` morphs idleW: a pathItemCount change
+            // makes PathView rebuild every delegate, and the rebuilt focused
+            // card loses its expanded/selected state mid-toggle.
             readonly property real step: idleW + 6
-            readonly property int slots: 2 * Math.ceil((width / step + 2) / 2) + 1
+            readonly property int slots: 2 * Math.ceil((width / (slimW + 6) + 2) / 2) + 1
             readonly property int pathSlots: count > 0 ? Math.min(slots, count) : slots
             pathItemCount: pathSlots
             cacheItemCount: 2
@@ -717,6 +722,12 @@ Window {
             readonly property bool pushNeighbors: controller.cardLayout === "push"
             property real pushAmount: pushNeighbors ? 1 : 0
             Behavior on pushAmount { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+            // Push mode widens the focused card without waiting for
+            // expandDelay, so switching to overdraw must keep it expanded.
+            onPushNeighborsChanged: {
+                if (!pushNeighbors && currentItem && !sweeping)
+                    currentItem.expanded = true
+            }
             property var grownCells: []
             function trackGrowth(c: Item, grown: bool): void {
                 const i = grownCells.indexOf(c)
