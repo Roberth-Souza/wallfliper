@@ -1,4 +1,6 @@
 import QtQuick
+import QtQuick.Effects
+import QtQuick.Shapes
 import QtQuick.Window
 import org.kde.layershell as LayerShell
 
@@ -340,7 +342,7 @@ Window {
             else if (event.text === "r")
                 carousel.selectRandom()             // jump to a random card
             else if (event.text === "t")
-                controller.setCardLayout(carousel.pushNeighbors ? "overlay" : "push")
+                controller.setCardLayout(carousel.nextLayout[controller.cardLayout] ?? "push")
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
                 // Shift+D: delete the selected wallpaper file permanently (no
                 // confirmation). Must precede the nav branch below, which
@@ -370,7 +372,9 @@ Window {
             id: topBar
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: carousel.top
-            anchors.bottomMargin: 24
+            // Flow cards outgrow the band; the bar rides up to clear them and
+            // the crosshair above the focused card.
+            anchors.bottomMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
             width: Math.max(320, promptRow.implicitWidth + 40)
             height: promptRow.implicitHeight + 22
             color: Theme.bg
@@ -409,6 +413,115 @@ Window {
             }
         }
 
+        // ---- Flow decoration: orbit ellipse, side chevrons and crosshair.
+        // The flow layout is the deliberately dramatic mode, exempt from the
+        // flat/no-ornament rules (see DESIGN.md). Declared before the carousel
+        // so the orbit passes behind the cards; unloaded in the other modes.
+        Loader {
+            anchors.fill: parent
+            active: carousel.flowAmount > 0
+            sourceComponent: Item {
+                id: flowDecor
+                opacity: carousel.flowAmount
+
+                readonly property real cx: width / 2
+                readonly property real cy: carousel.y + carousel.height / 2
+                readonly property real cardTop: cy - carousel.flowH / 2
+                readonly property real cardBottom: cy + carousel.flowH / 2
+                readonly property color line: Qt.rgba(1, 1, 1, 0.45)
+                readonly property real orbitX: carousel.orbitA
+                readonly property real orbitY: carousel.orbitB
+                // Front arc's low point sits orbitDrop below the focused card's centre.
+                readonly property real orbitCy: cy + carousel.orbitDrop - carousel.orbitB
+                readonly property real arrowX: Math.min(carousel.flowW * 2.25, width / 2 - 32)
+                readonly property real arrowH: Math.round(carousel.flowH * 0.03)
+
+                Shape {
+                    anchors.fill: parent
+                    preferredRendererType: Shape.CurveRenderer
+                    ShapePath {
+                        strokeColor: flowDecor.line
+                        strokeWidth: 1
+                        fillColor: "transparent"
+                        PathAngleArc {
+                            centerX: flowDecor.cx
+                            centerY: flowDecor.orbitCy
+                            radiusX: flowDecor.orbitX
+                            radiusY: flowDecor.orbitY
+                            startAngle: 0
+                            sweepAngle: 360
+                        }
+                    }
+                }
+
+                // Crosshair: a hairline through the focused card's axis, from
+                // the bar down to the card and on below it, ticked mid-way.
+                Repeater {
+                    model: [flowDecor.cardTop - carousel.flowReach, flowDecor.cardBottom]
+                    delegate: Item {
+                        required property real modelData
+                        x: flowDecor.cx - 8
+                        y: modelData
+                        width: 16
+                        height: carousel.flowReach
+                        Rectangle {
+                            x: 8
+                            width: 1
+                            height: parent.height
+                            color: flowDecor.line
+                        }
+                        Rectangle {
+                            y: Math.round(parent.height / 2)
+                            width: parent.width + 1
+                            height: 1
+                            color: Theme.muted
+                        }
+                    }
+                }
+
+                Repeater {
+                    model: [-1, 1]
+                    delegate: Item {
+                        id: chevron
+                        required property int modelData
+                        x: flowDecor.cx + modelData * flowDecor.arrowX - width / 2
+                        y: flowDecor.orbitCy - height / 2
+                        width: flowDecor.arrowH * 2
+                        height: flowDecor.arrowH * 2
+
+                        Shape {
+                            anchors.centerIn: parent
+                            width: flowDecor.arrowH / 2
+                            height: flowDecor.arrowH
+                            preferredRendererType: Shape.CurveRenderer
+                            ShapePath {
+                                strokeColor: Theme.text
+                                strokeWidth: 1.5
+                                fillColor: "transparent"
+                                capStyle: ShapePath.FlatCap
+                                startX: chevron.modelData < 0 ? flowDecor.arrowH / 2 : 0
+                                startY: 0
+                                PathLine {
+                                    x: chevron.modelData < 0 ? 0 : flowDecor.arrowH / 2
+                                    y: flowDecor.arrowH / 2
+                                }
+                                PathLine {
+                                    x: chevron.modelData < 0 ? flowDecor.arrowH / 2 : 0
+                                    y: flowDecor.arrowH
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: carousel.scrollBy(chevron.modelData, false)
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Carousel: an infinite loop of portrait wallcards ----
         // The wallpapers are the content; chrome recedes. Cards are portrait so
         // a handful read at once; the focused card widens to the wallpaper's
@@ -425,7 +538,8 @@ Window {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
             height: Math.min(Math.round(win.height * 0.40), 480)
-            clip: true
+            // Flow cards (and the focused card's glow) outgrow the band.
+            clip: flowAmount <= 0
             // No drag/flick: movement is keyboard + wheel only, so the wheel
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
@@ -442,7 +556,7 @@ Window {
             movementDirection: PathView.Shortest
             // Push mode glides slower so the size-follows-position widen reads;
             // overdraw mode keeps the original snappy step.
-            readonly property int navMoveDuration: pushNeighbors ? 380 : 220
+            readonly property int navMoveDuration: pushNeighbors || flowMode ? 380 : 220
             // Time budget per extra card in a multi-step glide; the speed cap.
             readonly property int glidePerStep: 100
             // Steps folded into the running glide. A single step expands the
@@ -552,7 +666,7 @@ Window {
             // Click: in push mode, glide the shortest way round to the card as
             // one burst; overdraw mode snaps by index like before.
             function glideTo(i: int): void {
-                if (!pushNeighbors) {
+                if (!pushNeighbors && !flowMode) {
                     focusIndex(i)
                     return
                 }
@@ -728,6 +842,89 @@ Window {
                 if (!pushNeighbors && currentItem && !sweeping)
                     currentItem.expanded = true
             }
+            readonly property var nextLayout: ({ push: "overlay", overlay: "flow", flow: "push" })
+
+            // Flow: a cover-flow arc. The focused card faces the viewer; the
+            // rest turn about their vertical axis toward the centre, shrink,
+            // darken and bunch up with distance. Sized from the window, not
+            // the band, so it reads as large as a hero shot. Everything is a
+            // pure function of a cell's `rel`, like push, and the 3D look is a
+            // single per-card projective matrix (cardMatrix), so a glide only
+            // updates matrices: no relayout, and the glow's blur stays cached.
+            readonly property bool flowMode: controller.cardLayout === "flow"
+            property real flowAmount: flowMode ? 1 : 0
+            Behavior on flowAmount { NumberAnimation { duration: 360; easing.type: Easing.OutCubic } }
+            readonly property real flowH: Math.round(win.height * 0.56)
+            readonly property real flowW: Math.round(flowH * 0.585)
+            // Crosshair arm length above/below the focused card.
+            readonly property real flowReach: Math.round(win.height * 0.08)
+            // How far the bar / color strip move off the band edges in flow.
+            readonly property real flowOverhang: (flowH - cardH) / 2 + flowReach
+            // Turn about the vertical axis, steepening with distance so the
+            // cards bend round the orbit like slats on a drum: 36°, 46°, 58°
+            // at one, two, three slots out.
+            function flowAngle(a: real): real {
+                const deg = a <= 1 ? 36 * a
+                    : Math.min(66, 36 + 10 * (a - 1) + (a - 1) * (a - 2))
+                return deg * Math.PI / 180
+            }
+            // Eye distance for the perspective divide: smaller is more dramatic.
+            readonly property real flowDepth: flowW * 1.86
+            // Centre offset of a card `a` slots out, in flowW: the first
+            // neighbour sits a full card away, then each gap shrinks by 0.71,
+            // which puts the third card over the orbit's end (hiding its tip).
+            function flowX(r: real): real {
+                const a = Math.abs(r)
+                const x = a <= 1 ? 0.99 * a : 0.99 + 0.57 * (1 - Math.pow(0.71, a - 1)) / 0.29
+                return Math.sign(r) * x * flowW
+            }
+            // The orbit ring the cards are mounted on, seen from above: it
+            // crosses every card at the same relative height (`orbitDrop`
+            // below the centre at full scale), so cards rise along the ring's
+            // front arc as they move out toward its ends.
+            readonly property real orbitA: Math.min(flowW * 2.0, width / 2 - 80)
+            readonly property real orbitB: flowH * 0.15
+            readonly property real orbitDrop: flowH * 0.25
+            function flowRise(r: real): real {
+                const u = flowX(r) / orbitA
+                return orbitB * (1 - Math.sqrt(Math.max(0, 1 - u * u)))
+                    - orbitDrop * (1 - flowScale(Math.abs(r)))
+            }
+            function flowScale(a: real): real {
+                return a <= 1 ? 1 - 0.29 * a
+                    : a <= 2 ? 0.71 - 0.15 * (a - 1)
+                    : Math.max(0.35, 0.56 - 0.1 * (a - 2))
+            }
+            // Horizontal-only squeeze: the end cards (three slots out) read as
+            // thin slivers closing the ring.
+            function flowThin(a: real): real {
+                return 1 - 0.4 * Math.max(0, Math.min(1, a - 2))
+            }
+            // Item-space matrix for a w x h card at `r`: shear (fading out as
+            // flow fades in), flow scale and thinning, rotation about the
+            // vertical centre line, perspective divide, all about the card
+            // centre. Output z is flattened. Row-major, as Qt.matrix4x4 takes it.
+            function cardMatrix(r: real, w: real, h: real): matrix4x4 {
+                const f = flowAmount
+                const k = Theme.cardSlant * (1 - f)
+                const a = Math.abs(r)
+                const s = 1 - f * (1 - flowScale(a))
+                const q = 1 - f * (1 - flowThin(a))
+                const th = f * Math.sign(r) * flowAngle(a)
+                const c = Math.cos(th)
+                const p = Math.sin(th) / flowDepth
+                const cx = w / 2
+                const cy = h / 2
+                const a1 = s * q * (c + cx * p), b1 = s * q * k * (c + cx * p)
+                const a2 = s * q * cy * p, b2 = s * (1 + q * cy * p * k)
+                const a4 = s * q * p, b4 = s * q * p * k
+                return Qt.matrix4x4(
+                    a1, b1, 0, cx - a1 * cx - b1 * cy,
+                    a2, b2, 0, cy - a2 * cx - b2 * cy,
+                    0, 0, 1, 0,
+                    a4, b4, 0, 1 - a4 * cx - b4 * cy)
+            }
+
             property var grownCells: []
             function trackGrowth(c: Item, grown: bool): void {
                 const i = grownCells.indexOf(c)
@@ -807,7 +1004,8 @@ Window {
                 width: carousel.idleW
                 // Overdraw mode: a card still shrinking after losing focus
                 // stays above the idle cards it overlaps, below the new focus.
-                z: carousel.pushNeighbors ? near
+                z: carousel.flowMode ? -dist
+                    : carousel.pushNeighbors ? near
                     : selected ? 2 : cardVisual.width > carousel.idleW + 0.5 ? 1 : 0
 
                 // Push mode sizing. Signed distance from the view centre in
@@ -826,6 +1024,57 @@ Window {
                     + (expandedW - carousel.poppedW) * carousel.expandAmount)
                 readonly property real push: carousel.pushAt(rel)
                 onGrowthChanged: carousel.trackGrowth(cell, growth > 0)
+
+                // Flow placement: translated from the evenly spaced slot to the
+                // arc position; the rest of the look is in `cardMatrix`.
+                readonly property real dist: Math.abs(rel)
+                readonly property real flowShift:
+                    (carousel.flowX(rel) - rel * carousel.step) * carousel.flowAmount
+                readonly property matrix4x4 cardMatrix:
+                    carousel.cardMatrix(rel, cardVisual.width, cardVisual.height)
+                // Far cards fade out; so does the loop seam in a small library,
+                // where both sides of the arc would otherwise swap in view.
+                opacity: 1 - carousel.flowAmount * (1 - Math.min(
+                    Math.max(0, Math.min(1, 4 - dist)),
+                    Math.max(0, Math.min(1, carousel.count / 2 - dist))))
+
+                // Flow glow behind the focused card, shaped and moved by the
+                // same matrix. Only the cards straddling the centre load it,
+                // and it stays off mid-sweep (expandAmount 0), so at most two
+                // live effects, none while scrubbing. The white source sits
+                // exactly under the opaque card, so only the halo shows.
+                Loader {
+                    x: cardVisual.x
+                    y: cardVisual.y
+                    width: cardVisual.width
+                    height: cardVisual.height
+                    readonly property real strength:
+                        carousel.flowAmount * cell.near * cell.near * carousel.expandAmount
+                    active: strength > 0
+                    opacity: strength
+                    transform: Matrix4x4 { matrix: cell.cardMatrix }
+                    sourceComponent: Item {
+                        Rectangle {
+                            id: glowSource
+                            anchors.fill: parent
+                            color: Theme.frame
+                            visible: false
+                        }
+                        MultiEffect {
+                            anchors.fill: parent
+                            source: glowSource
+                            // Auto padding cuts the blur tail at ~2% alpha,
+                            // a faint hard-edged box on dark wallpapers.
+                            autoPaddingEnabled: false
+                            paddingRect: Qt.rect(96, 96, 96, 96)
+                            blurMax: 48
+                            shadowEnabled: true
+                            shadowColor: Theme.frame
+                            shadowBlur: 1.0
+                            shadowOpacity: 0.7
+                        }
+                    }
+                }
                 Component.onDestruction: carousel.trackGrowth(cell, false)
 
                 Timer { id: expandTimer; interval: carousel.expandDelay; onTriggered: cell.expanded = true }
@@ -863,20 +1112,26 @@ Window {
                 Rectangle {
                     id: cardVisual
                     anchors.verticalCenter: parent.verticalCenter
+                    anchors.verticalCenterOffset: -carousel.flowRise(cell.rel) * carousel.flowAmount
                     // Centred in the slot so growth overflows symmetrically. No
                     // viewport clamp needed: the focused cell is always
                     // screen-centered (loop) and expandedW is capped to a
                     // fraction of the screen, so the expansion can't run
                     // off-screen.
-                    x: (cell.width - width) / 2 + cell.push
+                    x: (cell.width - width) / 2 + cell.push + cell.flowShift
                     // Push mode binds size to position; overdraw mode leaves
                     // the idle size here and animates via the states below.
-                    width: carousel.pushNeighbors ? carousel.idleW + cell.growth : carousel.idleW
-                    height: carousel.pushNeighbors
+                    // Flow cards share one size (depth is in the matrix).
+                    readonly property real baseW:
+                        carousel.pushNeighbors ? carousel.idleW + cell.growth : carousel.idleW
+                    readonly property real baseH: carousel.pushNeighbors
                         ? carousel.idleH + (carousel.cardH - carousel.idleH) * cell.near
                         : carousel.idleH
+                    width: baseW + (carousel.flowW - baseW) * carousel.flowAmount
+                    height: baseH + (carousel.flowH - baseH) * carousel.flowAmount
                     color: "#161616"
-                    border.color: cell.selected ? Theme.frame : "transparent"
+                    border.color: cell.selected ? Theme.frame
+                        : Qt.rgba(1, 1, 1, 0.4 * carousel.flowAmount * Math.max(0, 1 - cell.dist / 4))
                     border.width: Theme.frameWidth
                     clip: true
                     antialiasing: true
@@ -886,15 +1141,8 @@ Window {
                     // one continuous set of slats. The shear is uniform, so
                     // edges stay parallel and spacing reads unchanged. Shear
                     // about the vertical centre so the card leans in place
-                    // instead of walking.
-                    readonly property real slant: Theme.cardSlant
-                    transform: Matrix4x4 {
-                        matrix: Qt.matrix4x4(
-                            1, cardVisual.slant, 0, -cardVisual.slant * cardVisual.height / 2,
-                            0, 1, 0, 0,
-                            0, 0, 1, 0,
-                            0, 0, 0, 1)
-                    }
+                    // instead of walking. Flow swaps the shear for its 3D turn.
+                    transform: Matrix4x4 { matrix: cell.cardMatrix }
 
                     states: [
                         State {
@@ -902,7 +1150,9 @@ Window {
                             when: !carousel.pushNeighbors && cell.selected && !cell.expanded
                             PropertyChanges {
                                 cardVisual.width: carousel.poppedW
+                                    + (carousel.flowW - carousel.poppedW) * carousel.flowAmount
                                 cardVisual.height: carousel.cardH
+                                    + (carousel.flowH - carousel.cardH) * carousel.flowAmount
                             }
                         },
                         State {
@@ -910,19 +1160,28 @@ Window {
                             when: !carousel.pushNeighbors && cell.selected && cell.expanded
                             PropertyChanges {
                                 cardVisual.width: cell.expandedW
+                                    + (carousel.flowW - cell.expandedW) * carousel.flowAmount
                                 cardVisual.height: carousel.cardH
+                                    + (carousel.flowH - carousel.cardH) * carousel.flowAmount
                             }
                         }
                     ]
+                    // The overlay states stay live in flow (their sizes lerp to
+                    // the flow size), so their transitions are off whenever flow
+                    // is in play: an animation there would target a size the
+                    // flowAmount morph has already moved past, then jump.
+                    readonly property bool sizeTransitions: carousel.flowAmount <= 0
                     transitions: [
                         // Fast, smooth pop the moment focus lands.
                         Transition {
                             to: "popped"
+                            enabled: cardVisual.sizeTransitions
                             NumberAnimation { properties: "width,height"; duration: 150; easing.type: Easing.OutCubic }
                         },
                         // Slower, deliberate landscape widen.
                         Transition {
                             to: "expanded"
+                            enabled: cardVisual.sizeTransitions
                             NumberAnimation { properties: "width,height"; duration: 300; easing.type: Easing.OutCubic }
                         },
                         // An expanded card shrinks back gradually when focus
@@ -930,10 +1189,12 @@ Window {
                         Transition {
                             from: "expanded"
                             to: ""
+                            enabled: cardVisual.sizeTransitions
                             NumberAnimation { properties: "width,height"; duration: 420; easing.type: Easing.InOutQuad }
                         },
                         Transition {
                             to: ""
+                            enabled: cardVisual.sizeTransitions
                             NumberAnimation { properties: "width,height"; duration: 180; easing.type: Easing.OutCubic }
                         }
                     ]
@@ -977,6 +1238,14 @@ Window {
                         font.family: Theme.fontFamily
                         font.pixelSize: 24
                     }
+                    // Flow depth cue: cards darken as they recede.
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        color: "black"
+                        opacity: carousel.flowAmount * Math.min(0.85, 0.22 * cell.dist)
+                        visible: opacity > 0
+                    }
 
                     // Inside the card so hit-testing follows the shear transform
                     // (an outside sibling would keep the unsheared rectangle).
@@ -1007,7 +1276,7 @@ Window {
             id: colorBar
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: carousel.bottom
-            anchors.topMargin: 24
+            anchors.topMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
             width: swatchRow.implicitWidth + 28
             height: swatchRow.implicitHeight + 20
             color: Theme.bg

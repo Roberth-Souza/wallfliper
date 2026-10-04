@@ -24,6 +24,15 @@ When in doubt, remove. Every pixel of chrome must justify itself.
 - Selection colour: white outline only — the same white-selection language everywhere.
 - Settings: typing `/config` in search opens a small centered overlay card (not a separate window), dimming the carousel behind it. It's *user-invoked*, so it's not "modal noise" — but it stays flat/monochrome/keyboard-first like everything else, and exists to expose the few real knobs (wallpaper folder) plus light maintenance later, never to add chrome to the main view. Backdrop darkness is fixed (see hard rules), not a knob. Laid out as a TUI list: a header, then `label` rows with the value alongside.
 
+## Flow layout (the dramatic exception)
+The `flow` card layout (third in the `t` cycle) is a deliberate opt-in exception to the flat/no-ornament hard rules — a cover-flow arc in perspective, styled after a "dramatic" hero mockup. Inside flow only:
+- Cards are **unsheared** rectangles turned in 3D about their vertical axis, shrinking, darkening and fading with distance; spaced, not glued. The focused card faces the viewer, portrait, with **no** landscape widen.
+- The focused card gets a soft white **glow** (the white frame language, blurred).
+- A thin grey **orbit ellipse** runs behind the cards, white **chevrons** (clickable, ‹ ›) sit at its ends, and a **crosshair** hairline (ticked) runs from the floating bar to the focused card and on below it.
+- Still monochrome, still sharp corners, still keyboard-first. Not added: counters, index lists, pagination dots, hint text, background art, floor reflection.
+
+Everything above stays forbidden in `push` and `overlay`; flow decoration must never leak into them.
+
 ## Anti-goals
 - Not Electron. Not a "modern app" look. Not Material. Not rounded-everything.
 - No onboarding, no splash screen, no branding moment.
