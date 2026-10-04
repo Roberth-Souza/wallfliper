@@ -339,6 +339,8 @@ Window {
                 win.enterColorMode()                // color filter strip
             else if (event.text === "r")
                 carousel.selectRandom()             // jump to a random card
+            else if (event.text === "t")
+                controller.setCardLayout(carousel.pushNeighbors ? "overlay" : "push")
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
                 // Shift+D: delete the selected wallpaper file permanently (no
                 // confirmation). Must precede the nav branch below, which
@@ -438,9 +440,66 @@ Window {
             preferredHighlightEnd: 0.5
             highlightRangeMode: PathView.StrictlyEnforceRange
             movementDirection: PathView.Shortest
-            readonly property int navMoveDuration: 220
+            // Push mode glides slower so the size-follows-position widen reads;
+            // overdraw mode keeps the original snappy step.
+            readonly property int navMoveDuration: pushNeighbors ? 380 : 220
             // Time budget per extra card in a multi-step glide; the speed cap.
             readonly property int glidePerStep: 100
+            // Steps folded into the running glide. A single step expands the
+            // focused card while it glides in; a burst (held key, wheel spin,
+            // random select) only pops the cards it passes and expands the one
+            // it lands on, so the strip doesn't ripple open/shut mid-sweep.
+            property int _burst: 0
+            readonly property bool sweeping:
+                (glide.running && _burst > 1) || bounce.running
+            // How far a centred card may widen past the pop: 0 mid-sweep, 1 at
+            // rest. Card size itself is driven by distance from the centre, so
+            // a single step's widen moves in lockstep with the glide. A random
+            // select lands, rests a beat, then widens slowly: after a long
+            // jump the eye needs to find the card before it opens.
+            property real expandAmount: 1
+            property bool _randomLanding: false
+            readonly property int randomSettleDelay: 300
+            readonly property int randomExpandDuration: 600
+            onSweepingChanged: {
+                expandOut.stop()
+                expandIn.stop()
+                expandSettle.stop()
+                if (sweeping)
+                    expandOut.restart()
+                else if (_randomLanding) {
+                    _randomLanding = false
+                    expandSettle.restart()
+                } else
+                    expandIn.restart()
+            }
+            NumberAnimation {
+                id: expandOut
+                target: carousel
+                property: "expandAmount"
+                to: 0
+                duration: 150
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                id: expandIn
+                target: carousel
+                property: "expandAmount"
+                to: 1
+                duration: carousel.navMoveDuration
+                easing.type: Easing.OutCubic
+            }
+            SequentialAnimation {
+                id: expandSettle
+                PauseAnimation { duration: carousel.randomSettleDelay }
+                NumberAnimation {
+                    target: carousel
+                    property: "expandAmount"
+                    to: 1
+                    duration: carousel.randomExpandDuration
+                    easing.type: Easing.InOutCubic
+                }
+            }
             // Snap (not sweep) to the applied card on launch; animate after.
             property bool _primed: false
             highlightMoveDuration: _primed ? navMoveDuration : 0
@@ -466,11 +525,12 @@ Window {
             function scrollBy(steps: int, chained: bool): void {
                 if (count <= 0 || steps === 0)
                     return
+                _randomLanding = false
                 const sameDir = glide.running
                     && Math.sign(glide.to - glide.from) === Math.sign(-steps)
-                const target = (chained && sameDir)
-                    ? glide.to - steps
-                    : Math.round(offset) - steps
+                const extend = chained && sameDir
+                const target = extend ? glide.to - steps : Math.round(offset) - steps
+                _burst = extend ? _burst + 1 : 1
                 glide.stop()
                 bounce.stop()
                 glide.from = offset
@@ -481,12 +541,35 @@ Window {
                     + glidePerStep * Math.max(0, Math.abs(target - offset) - 1)
                 glide.restart()
             }
-            // Direct focus (click, filter reset): kill any glide first so it
-            // can't keep driving offset against the index-driven snap.
+            // Direct focus (filter reset): kill any glide first so it can't
+            // keep driving offset against the index-driven snap.
             function focusIndex(i: int): void {
+                _randomLanding = false
                 glide.stop()
                 bounce.stop()
                 currentIndex = i
+            }
+            // Click: in push mode, glide the shortest way round to the card as
+            // one burst; overdraw mode snaps by index like before.
+            function glideTo(i: int): void {
+                if (!pushNeighbors) {
+                    focusIndex(i)
+                    return
+                }
+                if (count <= 0 || i === currentIndex)
+                    return
+                let steps = ((i - currentIndex) % count + count) % count
+                if (steps > count / 2)
+                    steps -= count
+                _randomLanding = false
+                glide.stop()
+                bounce.stop()
+                _burst = Math.abs(steps)
+                glide.from = offset
+                glide.to = Math.round(offset) - steps
+                glide.duration = navMoveDuration
+                    + glidePerStep * Math.max(0, Math.abs(steps) - 1)
+                glide.restart()
             }
             NumberAnimation {
                 id: glide
@@ -529,6 +612,9 @@ Window {
                 // whole lap back to the same card instead of the short settle.
                 bounceBack.from = bounceOut.to
                 bounceBack.to = target
+                // Set after the stops above: they can flip `sweeping` off and
+                // would consume the flag before the bounce even starts.
+                _randomLanding = true
                 bounce.restart()
             }
             SequentialAnimation {
@@ -590,24 +676,62 @@ Window {
                 }
             }
 
-            // Card geometry. Portrait by default; the focused card first *pops*
-            // (full height + a touch wider, instantly) then widens to the full
-            // landscape `expandedW` after the settle delay. These ratios and the
-            // delay are the only knobs.
+            // Card geometry. Portrait by default. Push mode: the focused card
+            // widens to the full landscape `expandedW` while it glides in, and
+            // mid-sweep only *pops* (full height + a touch wider). Overdraw
+            // mode: it pops instantly, then widens after expandDelay.
             readonly property real cardH: height
             readonly property real portraitW: Math.round(cardH * 0.66)
-            // Quick "pop" size the instant a card is focused — a touch wider than
-            // portrait — before the slower widen to the wallpaper's own aspect
-            // (per-cell `expandedW` on the delegate).
+            // "Pop" size — a touch wider than portrait — a card reaches as it
+            // centres mid-sweep; at rest it widens on to the wallpaper's own
+            // aspect (per-cell `expandedW` on the delegate).
             readonly property real poppedW: Math.round(cardH * 0.80)
             // Idle cards sit slightly inset so the focused card visibly lifts off
             // them when it pops to full strip height.
             readonly property real idleH: Math.round(cardH * 0.92)
-            readonly property int expandDelay: 650   // ms focused before widening
+            readonly property int expandDelay: 650   // overdraw mode: ms focused before widening
             // Decode the card thumbnail at 2x the card height (supersampled), so
             // it stays sharp on any display density without leaning on a possibly
             // under-reported devicePixelRatio. Bounded by the cache resolution.
             readonly property int decodeH: Math.round(cardH * 2)
+
+            // A card wider than its slot shoves its neighbours outward instead
+            // of drawing over them (`t` toggles back to overdraw). The path
+            // can't vary spacing per item, so the slots stay fixed and each
+            // card's visual is translated by the extra width lying between the
+            // view centre and its own slot centre (each grown card's growth
+            // spread evenly over its slot). That keeps the push continuous
+            // while cards glide through the centre, and the centred card itself
+            // never moves. Positions come from `offset` (cell `rel`), never
+            // from item x: PathView lays items out one by one, so reading a
+            // neighbour's x mid-layout sees last frame's value and jitters.
+            readonly property bool pushNeighbors: controller.cardLayout === "push"
+            property real pushAmount: pushNeighbors ? 1 : 0
+            Behavior on pushAmount { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+            property var grownCells: []
+            function trackGrowth(c: Item, grown: bool): void {
+                const i = grownCells.indexOf(c)
+                if (grown && i < 0)
+                    grownCells = grownCells.concat([c])
+                else if (!grown && i >= 0)
+                    grownCells = grownCells.filter(o => o !== c)
+            }
+            // `s`: a slot centre relative to the view centre, in px.
+            function pushAt(s: real): real {
+                if (pushAmount <= 0)
+                    return 0
+                let push = 0
+                for (const c of grownCells) {
+                    const centre = c.rel * step
+                    const a = centre - step / 2
+                    const b = centre + step / 2
+                    const overlap = s >= 0
+                        ? Math.max(0, Math.min(s, b) - Math.max(0, a))
+                        : -Math.max(0, Math.min(0, b) - Math.max(s, a))
+                    push += c.growth * overlap / step
+                }
+                return push * pushAmount
+            }
 
             model: controller.model
 
@@ -631,7 +755,9 @@ Window {
                 required property string thumbnail
                 required property string preview
                 property bool selected: PathView.isCurrentItem
-                property bool expanded: false   // full landscape widen (after the settle delay)
+                // Overdraw mode only: the focused card pops at once, then
+                // widens once it has stayed focused for expandDelay.
+                property bool expanded: false
 
                 // Cached instances that fell off the path must not paint.
                 visible: PathView.onPath
@@ -639,16 +765,33 @@ Window {
                 // The layout slot stays portrait, so the loop's slot step never
                 // changes. The card *visual* grows beyond this box symmetrically
                 // (the focused cell is always screen-centered in a loop, so the
-                // growth can never run off-screen) and is z-lifted to draw above
-                // the neighbours it overflows.
+                // growth can never run off-screen); neighbours are pushed aside
+                // (`push`), or overdrawn via the z-lift when pushNeighbors is off.
                 height: carousel.cardH
                 width: carousel.portraitW
-                z: selected ? 1 : 0
+                // Overdraw mode: a card still shrinking after losing focus
+                // stays above the idle cards it overlaps, below the new focus.
+                z: carousel.pushNeighbors ? near
+                    : selected ? 2 : cardVisual.width > carousel.portraitW + 0.5 ? 1 : 0
 
-                // Pop the instant it's focused (no waiting on expandDelay): the
-                // card lifts to full strip height and a wider portrait, standing
-                // off the idle cards. Only *then*, after the delay, does it widen
-                // to a full landscape card. Collapse settles back when focus leaves.
+                // Push mode sizing. Signed distance from the view centre in
+                // slots, wrapped around the loop. `near` is 1 dead-centre, 0
+                // one slot away: the card pops and widens as it glides in, in
+                // lockstep with the neighbours it pushes.
+                readonly property real rel: {
+                    const n = carousel.count
+                    if (n <= 0)
+                        return 0
+                    const r = ((index + carousel.offset) % n + n) % n
+                    return r > n / 2 ? r - n : r
+                }
+                readonly property real near: Math.max(0, 1 - Math.abs(rel))
+                readonly property real growth: near * (carousel.poppedW - carousel.portraitW
+                    + (expandedW - carousel.poppedW) * carousel.expandAmount)
+                readonly property real push: carousel.pushAt(rel * carousel.step)
+                onGrowthChanged: carousel.trackGrowth(cell, growth > 0.5)
+                Component.onDestruction: carousel.trackGrowth(cell, false)
+
                 Timer { id: expandTimer; interval: carousel.expandDelay; onTriggered: cell.expanded = true }
                 onSelectedChanged: {
                     if (selected) {
@@ -659,6 +802,7 @@ Window {
                         cell.expanded = false
                     }
                 }
+
                 Component.onCompleted: if (selected) {
                     if (kind === "video") controller.ensurePreview(index)
                     expandTimer.restart()
@@ -688,10 +832,13 @@ Window {
                     // screen-centered (loop) and expandedW is capped to a
                     // fraction of the screen, so the expansion can't run
                     // off-screen.
-                    x: (cell.width - width) / 2
-                    // Idle size by default; the two states drive the pop, then the widen.
-                    width: carousel.portraitW
-                    height: carousel.idleH
+                    x: (cell.width - width) / 2 + cell.push
+                    // Push mode binds size to position; overdraw mode leaves
+                    // the idle size here and animates via the states below.
+                    width: carousel.pushNeighbors ? carousel.portraitW + cell.growth : carousel.portraitW
+                    height: carousel.pushNeighbors
+                        ? carousel.idleH + (carousel.cardH - carousel.idleH) * cell.near
+                        : carousel.idleH
                     color: "#161616"
                     border.color: cell.selected ? Theme.frame : "transparent"
                     border.width: Theme.frameWidth
@@ -716,7 +863,7 @@ Window {
                     states: [
                         State {
                             name: "popped"
-                            when: cell.selected && !cell.expanded
+                            when: !carousel.pushNeighbors && cell.selected && !cell.expanded
                             PropertyChanges {
                                 cardVisual.width: carousel.poppedW
                                 cardVisual.height: carousel.cardH
@@ -724,7 +871,7 @@ Window {
                         },
                         State {
                             name: "expanded"
-                            when: cell.selected && cell.expanded
+                            when: !carousel.pushNeighbors && cell.selected && cell.expanded
                             PropertyChanges {
                                 cardVisual.width: cell.expandedW
                                 cardVisual.height: carousel.cardH
@@ -742,7 +889,13 @@ Window {
                             to: "expanded"
                             NumberAnimation { properties: "width,height"; duration: 300; easing.type: Easing.OutCubic }
                         },
-                        // Settle back to idle when focus leaves.
+                        // An expanded card shrinks back gradually when focus
+                        // moves on; a sweep's popped cards settle fast.
+                        Transition {
+                            from: "expanded"
+                            to: ""
+                            NumberAnimation { properties: "width,height"; duration: 420; easing.type: Easing.InOutQuad }
+                        },
                         Transition {
                             to: ""
                             NumberAnimation { properties: "width,height"; duration: 180; easing.type: Easing.OutCubic }
@@ -797,7 +950,7 @@ Window {
                         // A single click focuses the card (never hover);
                         // double-click applies and exits.
                         onClicked: {
-                            carousel.focusIndex(cell.index)
+                            carousel.glideTo(cell.index)
                             if (win.searching)
                                 win.exitSearchKeep()
                         }

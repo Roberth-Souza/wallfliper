@@ -153,6 +153,7 @@ class Controller(QObject):
     folderManualRequested = Signal()
     kindFilterChanged = Signal()
     colorFilterChanged = Signal()
+    cardLayoutChanged = Signal()
     # Ask Main.qml to paint the switch itself on a layer-shell surface, because
     # the configured animation is a shader swww cannot do (see ui/shaders.py).
     # Args: old wallpaper URL, new wallpaper URL, baked shader URL, duration ms.
@@ -227,6 +228,11 @@ class Controller(QObject):
     def colorFilter(self) -> str:
         """Active color filter: "all" or a palette bucket name."""
         return self._color_filter
+
+    @Property(str, notify=cardLayoutChanged)
+    def cardLayout(self) -> str:
+        """Carousel focus style: "push" or "overlay" (unknown values read as push)."""
+        return "overlay" if self._config.card_layout == "overlay" else "push"
 
     @Property("QVariantList", constant=True)
     def colorPalette(self) -> list[dict]:
@@ -499,6 +505,14 @@ class Controller(QObject):
             return "not a folder"
         self.setFolder(str(path))
         return ""
+
+    @Slot(str)
+    def setCardLayout(self, layout: str) -> None:
+        if layout not in ("push", "overlay") or layout == self.cardLayout:
+            return
+        self._config.card_layout = layout
+        save_config(self._config)
+        self.cardLayoutChanged.emit()
 
     @Slot(str)
     def setFolder(self, folder: str) -> None:
