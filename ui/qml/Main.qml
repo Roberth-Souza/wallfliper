@@ -992,8 +992,9 @@ Window {
                 // widens once it has stayed focused for expandDelay.
                 property bool expanded: false
 
-                // Cached instances that fell off the path must not paint.
-                visible: PathView.onPath
+                // Cached instances that fell off the path must not paint, and
+                // a faded-out seam card (see seamFade) must not take clicks.
+                visible: PathView.onPath && opacity > 0
 
                 // The layout slot stays at the idle width, so the loop's slot
                 // step never changes with focus. The card *visual* grows beyond this box symmetrically
@@ -1032,11 +1033,17 @@ Window {
                     (carousel.flowX(rel) - rel * carousel.step) * carousel.flowAmount
                 readonly property matrix4x4 cardMatrix:
                     carousel.cardMatrix(rel, cardVisual.width, cardVisual.height)
-                // Far cards fade out; so does the loop seam in a small library,
-                // where both sides of the arc would otherwise swap in view.
-                opacity: 1 - carousel.flowAmount * (1 - Math.min(
-                    Math.max(0, Math.min(1, 4 - dist)),
-                    Math.max(0, Math.min(1, carousel.count / 2 - dist))))
+                // In a compact strip (count <= slots) the card opposite the
+                // focus sits on the path seam, which PathView puts at the left
+                // end, so an even count shows one more card left than right.
+                // It fades out at the seam instead: symmetric at rest, and a
+                // card crossing the seam mid-glide fades rather than jumping
+                // ends. Flow fades over a full slot so the arc's two sides
+                // never swap in view; far flow cards fade out too.
+                readonly property real seamFade: Math.max(0, Math.min(1,
+                    (carousel.count / 2 - dist) * (2 - carousel.flowAmount)))
+                opacity: seamFade
+                    * (1 - carousel.flowAmount * (1 - Math.max(0, Math.min(1, 4 - dist))))
 
                 // Flow glow behind the focused card, shaped and moved by the
                 // same matrix. Only the cards straddling the centre load it,
