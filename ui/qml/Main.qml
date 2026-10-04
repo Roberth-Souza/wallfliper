@@ -648,7 +648,7 @@ Window {
             // would fan out with big gaps (and stray partial cards at the band
             // edges). Shrinking the path to count*step keeps the spacing at
             // exactly one step — a compact centered strip.
-            readonly property real step: portraitW + 6
+            readonly property real step: idleW + 6
             readonly property int slots: 2 * Math.ceil((width / step + 2) / 2) + 1
             readonly property int pathSlots: count > 0 ? Math.min(slots, count) : slots
             pathItemCount: pathSlots
@@ -682,6 +682,11 @@ Window {
             // mode: it pops instantly, then widens after expandDelay.
             readonly property real cardH: height
             readonly property real portraitW: Math.round(cardH * 0.66)
+            // Push mode idles narrower: nothing overlaps there, so slimmer
+            // slats fit more of the library on screen. Morphs with pushAmount
+            // so `t` reflows the strip instead of jumping.
+            readonly property real slimW: Math.round(cardH * 0.42)
+            readonly property real idleW: portraitW + (slimW - portraitW) * pushAmount
             // "Pop" size — a touch wider than portrait — a card reaches as it
             // centres mid-sweep; at rest it widens on to the wallpaper's own
             // aspect (per-cell `expandedW` on the delegate).
@@ -698,13 +703,17 @@ Window {
             // A card wider than its slot shoves its neighbours outward instead
             // of drawing over them (`t` toggles back to overdraw). The path
             // can't vary spacing per item, so the slots stay fixed and each
-            // card's visual is translated by the extra width lying between the
-            // view centre and its own slot centre (each grown card's growth
-            // spread evenly over its slot). That keeps the push continuous
-            // while cards glide through the centre, and the centred card itself
-            // never moves. Positions come from `offset` (cell `rel`), never
-            // from item x: PathView lays items out one by one, so reading a
-            // neighbour's x mid-layout sees last frame's value and jitters.
+            // card's visual is translated to where a contiguous strip would put
+            // it. Only the two cells straddling the centre grow: A at rel
+            // (-1, 0], B at (0, 1). Their centres sit step + (gA + gB) / 2
+            // apart and the view centre interpolates between them by the
+            // offset fraction, so every card outside the pair moves at exactly
+            // the glide's speed. (Spreading each card's growth over its slot
+            // instead makes outer cards stall, or even back up once the growth
+            // exceeds the step, every time a card crosses the centre.)
+            // Positions come from `offset` (cell `rel`), never from item x:
+            // PathView lays items out one by one, so reading a neighbour's x
+            // mid-layout sees last frame's value and jitters.
             readonly property bool pushNeighbors: controller.cardLayout === "push"
             property real pushAmount: pushNeighbors ? 1 : 0
             Behavior on pushAmount { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
@@ -716,20 +725,36 @@ Window {
                 else if (!grown && i >= 0)
                     grownCells = grownCells.filter(o => o !== c)
             }
-            // `s`: a slot centre relative to the view centre, in px.
-            function pushAt(s: real): real {
+            readonly property real growthA: {
+                let g = 0
+                for (const c of grownCells)
+                    if (c.rel <= 0)
+                        g += c.growth
+                return g
+            }
+            readonly property real growthB: {
+                let g = 0
+                for (const c of grownCells)
+                    if (c.rel > 0)
+                        g += c.growth
+                return g
+            }
+            // `r`: a cell's rel. Every rel shares the offset's fractional part,
+            // so `u` (how far the focus has left A for B) is the same for all.
+            function pushAt(r: real): real {
                 if (pushAmount <= 0)
                     return 0
-                let push = 0
-                for (const c of grownCells) {
-                    const centre = c.rel * step
-                    const a = centre - step / 2
-                    const b = centre + step / 2
-                    const overlap = s >= 0
-                        ? Math.max(0, Math.min(s, b) - Math.max(0, a))
-                        : -Math.max(0, Math.min(0, b) - Math.max(s, a))
-                    push += c.growth * overlap / step
-                }
+                const u = Math.ceil(r) - r
+                const half = (growthA + growthB) / 2
+                let push
+                if (r <= -1)
+                    push = -u * half - growthA / 2
+                else if (r <= 0)
+                    push = -u * half
+                else if (r < 1)
+                    push = (1 - u) * half
+                else
+                    push = (1 - u) * half + growthB / 2
                 return push * pushAmount
             }
 
@@ -762,17 +787,17 @@ Window {
                 // Cached instances that fell off the path must not paint.
                 visible: PathView.onPath
 
-                // The layout slot stays portrait, so the loop's slot step never
-                // changes. The card *visual* grows beyond this box symmetrically
+                // The layout slot stays at the idle width, so the loop's slot
+                // step never changes with focus. The card *visual* grows beyond this box symmetrically
                 // (the focused cell is always screen-centered in a loop, so the
                 // growth can never run off-screen); neighbours are pushed aside
                 // (`push`), or overdrawn via the z-lift when pushNeighbors is off.
                 height: carousel.cardH
-                width: carousel.portraitW
+                width: carousel.idleW
                 // Overdraw mode: a card still shrinking after losing focus
                 // stays above the idle cards it overlaps, below the new focus.
                 z: carousel.pushNeighbors ? near
-                    : selected ? 2 : cardVisual.width > carousel.portraitW + 0.5 ? 1 : 0
+                    : selected ? 2 : cardVisual.width > carousel.idleW + 0.5 ? 1 : 0
 
                 // Push mode sizing. Signed distance from the view centre in
                 // slots, wrapped around the loop. `near` is 1 dead-centre, 0
@@ -786,10 +811,10 @@ Window {
                     return r > n / 2 ? r - n : r
                 }
                 readonly property real near: Math.max(0, 1 - Math.abs(rel))
-                readonly property real growth: near * (carousel.poppedW - carousel.portraitW
+                readonly property real growth: near * (carousel.poppedW - carousel.idleW
                     + (expandedW - carousel.poppedW) * carousel.expandAmount)
-                readonly property real push: carousel.pushAt(rel * carousel.step)
-                onGrowthChanged: carousel.trackGrowth(cell, growth > 0.5)
+                readonly property real push: carousel.pushAt(rel)
+                onGrowthChanged: carousel.trackGrowth(cell, growth > 0)
                 Component.onDestruction: carousel.trackGrowth(cell, false)
 
                 Timer { id: expandTimer; interval: carousel.expandDelay; onTriggered: cell.expanded = true }
@@ -835,7 +860,7 @@ Window {
                     x: (cell.width - width) / 2 + cell.push
                     // Push mode binds size to position; overdraw mode leaves
                     // the idle size here and animates via the states below.
-                    width: carousel.pushNeighbors ? carousel.portraitW + cell.growth : carousel.portraitW
+                    width: carousel.pushNeighbors ? carousel.idleW + cell.growth : carousel.idleW
                     height: carousel.pushNeighbors
                         ? carousel.idleH + (carousel.cardH - carousel.idleH) * cell.near
                         : carousel.idleH
