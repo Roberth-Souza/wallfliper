@@ -131,6 +131,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `c` | **Color filter** — a swatch strip opens below the cards; move to filter live, `Enter` keeps it, `Esc`/`c` clears |
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
+| `r` | **Select a random wallpaper** (doesn't apply it) |
 | `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
 | Double-click | Apply and close |
