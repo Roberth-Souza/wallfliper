@@ -219,6 +219,49 @@ Item {
         }
     }
 
+    // One hexagon filled with `texture` (cover-scaled, centred), or a flat
+    // placeholder while it is null.
+    component Hexagon: Shape {
+        id: shape
+        property Item texture: null
+        property real radius: 0
+        property bool outlined: false
+        property bool hovered: false
+
+        containsMode: Shape.FillContains
+        preferredRendererType: Shape.CurveRenderer
+
+        // fillItem maps the texture at its own pixel size from the shape
+        // origin; scale it to cover the hexagon's box, centred.
+        readonly property real texW: texture ? texture.implicitWidth : 1
+        readonly property real texH: texture ? texture.implicitHeight : 1
+        readonly property real cover: Math.max(width / texW, height / texH)
+        readonly property real cx: width / 2
+        readonly property real cy: height / 2
+        readonly property real h: radius * Math.sqrt(3) / 2
+
+        ShapePath {
+            fillColor: "#161616"
+            fillItem: shape.texture
+            fillTransform: Qt.matrix4x4(
+                shape.cover, 0, 0, (shape.width - shape.texW * shape.cover) / 2,
+                0, shape.cover, 0, (shape.height - shape.texH * shape.cover) / 2,
+                0, 0, 1, 0,
+                0, 0, 0, 1)
+            strokeColor: shape.hovered ? Theme.muted : Theme.frame
+            strokeWidth: shape.outlined ? Theme.frameWidth : -1
+            joinStyle: ShapePath.MiterJoin
+
+            startX: shape.cx - shape.radius; startY: shape.cy
+            PathLine { x: shape.cx - shape.radius / 2; y: shape.cy - shape.h }
+            PathLine { x: shape.cx + shape.radius / 2; y: shape.cy - shape.h }
+            PathLine { x: shape.cx + shape.radius; y: shape.cy }
+            PathLine { x: shape.cx + shape.radius / 2; y: shape.cy + shape.h }
+            PathLine { x: shape.cx - shape.radius / 2; y: shape.cy + shape.h }
+            PathLine { x: shape.cx - shape.radius; y: shape.cy }
+        }
+    }
+
     GridView {
         id: grid
         anchors.verticalCenter: parent.verticalCenter
@@ -269,7 +312,7 @@ Item {
             onSelectedChanged: if (selected && kind === "video") hive.previewRequested(index % hive.n)
             Component.onCompleted: if (selected && kind === "video") hive.previewRequested(index % hive.n)
 
-            // Texture sources for the hexagon fill, never painted themselves.
+            // Texture source for the hexagon fill, never painted itself.
             Image {
                 id: thumb
                 opacity: 0
@@ -278,60 +321,47 @@ Item {
                 cache: true
                 sourceSize.height: hive.decodeH
             }
-            AnimatedImage {
-                id: clip
-                opacity: 0
-                // Only load the clip while focused, so idle cells hold no decoder.
-                source: cell.previewing ? cell.preview : ""
-                playing: cell.previewing
-                cache: false
-                asynchronous: true
-            }
 
-            Shape {
+            Hexagon {
                 id: hex
                 anchors.fill: parent
-                containsMode: Shape.FillContains
-                preferredRendererType: Shape.CurveRenderer
+                texture: thumb.status === Image.Ready ? thumb : null
+                radius: hive.hexR
+                outlined: cell.outlined
+                hovered: cell.hovered
+            }
 
-                readonly property Item fill:
-                    cell.previewing && clip.status === Image.Ready ? clip
-                    : thumb.status === Image.Ready ? thumb : null
-                // fillItem maps the texture at its own pixel size from the
-                // shape origin; scale it to cover the hexagon's box, centred.
-                readonly property real texW: fill ? fill.implicitWidth : 1
-                readonly property real texH: fill ? fill.implicitHeight : 1
-                readonly property real cover: Math.max(width / texW, height / texH)
-                readonly property real cx: width / 2
-                readonly property real cy: height / 2
-                readonly property real r: hive.hexR
-                readonly property real h: r * Math.sqrt(3) / 2
-
-                ShapePath {
-                    fillColor: "#161616"
-                    fillItem: hex.fill
-                    fillTransform: Qt.matrix4x4(
-                        hex.cover, 0, 0, (hex.width - hex.texW * hex.cover) / 2,
-                        0, hex.cover, 0, (hex.height - hex.texH * hex.cover) / 2,
-                        0, 0, 1, 0,
-                        0, 0, 0, 1)
-                    strokeColor: cell.hovered ? Theme.muted : Theme.frame
-                    strokeWidth: cell.outlined ? Theme.frameWidth : -1
-                    joinStyle: ShapePath.MiterJoin
-
-                    startX: hex.cx - hex.r; startY: hex.cy
-                    PathLine { x: hex.cx - hex.r / 2; y: hex.cy - hex.h }
-                    PathLine { x: hex.cx + hex.r / 2; y: hex.cy - hex.h }
-                    PathLine { x: hex.cx + hex.r; y: hex.cy }
-                    PathLine { x: hex.cx + hex.r / 2; y: hex.cy + hex.h }
-                    PathLine { x: hex.cx - hex.r / 2; y: hex.cy + hex.h }
-                    PathLine { x: hex.cx - hex.r; y: hex.cy }
+            // The clip gets its own hexagon on top instead of swapping the
+            // base one's fillItem: a ShapePath that filled with the clip's
+            // alpha texture keeps blending the opaque thumbnail as if its
+            // alpha were 0 afterwards, so dark wallpapers turned see-through.
+            // Loaded only while focused, so idle cells hold no decoder.
+            Loader {
+                anchors.fill: parent
+                active: cell.previewing
+                sourceComponent: Item {
+                    AnimatedImage {
+                        id: clip
+                        opacity: 0
+                        source: cell.preview
+                        playing: true
+                        cache: false
+                        asynchronous: true
+                    }
+                    Hexagon {
+                        anchors.fill: parent
+                        visible: clip.status === Image.Ready
+                        texture: clip
+                        radius: hive.hexR
+                        outlined: cell.outlined
+                        hovered: cell.hovered
+                    }
                 }
             }
 
             Text {
                 anchors.centerIn: parent
-                visible: hex.fill === null
+                visible: hex.texture === null
                 text: cell.kind === "video" ? "▶" : "…"
                 color: "#3a3a3a"
                 font.family: Theme.fontFamily
