@@ -344,7 +344,7 @@ Window {
             else if (event.text === "t")
                 controller.setCardLayout(carousel.nextLayout[controller.cardLayout] ?? "push")
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
-                // Shift+D: delete the selected wallpaper file permanently (no
+                // Shift+D: move the selected wallpaper file to the trash (no
                 // confirmation). Must precede the nav branch below, which
                 // claims plain `d`. The next card slides into the centre
                 // (ListView keeps the numeric currentIndex, which now names
