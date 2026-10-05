@@ -433,7 +433,7 @@ Window {
                 readonly property real orbitY: carousel.orbitB
                 // Front arc's low point sits orbitDrop below the focused card's centre.
                 readonly property real orbitCy: cy + carousel.orbitDrop - carousel.orbitB
-                readonly property real arrowX: Math.min(carousel.flowW * 2.25, width / 2 - 32)
+                readonly property real arrowX: Math.min(carousel.flowW * 2.06, width / 2 - 32)
                 readonly property real arrowH: Math.round(carousel.flowH * 0.03)
 
                 Shape {
@@ -860,29 +860,28 @@ Window {
             readonly property real flowReach: Math.round(win.height * 0.08)
             // How far the bar / color strip move off the band edges in flow.
             readonly property real flowOverhang: (flowH - cardH) / 2 + flowReach
-            // Turn about the vertical axis, steepening with distance so the
-            // cards bend round the orbit like slats on a drum: 36°, 46°, 58°
-            // at one, two, three slots out.
+            // Turn about the vertical axis, steepening evenly with distance so
+            // the cards bend round the orbit like slats on a drum: 28°, 56°,
+            // 70° at one, two, three slots out (capped so the end cards stay
+            // readable).
             function flowAngle(a: real): real {
-                const deg = a <= 1 ? 36 * a
-                    : Math.min(66, 36 + 10 * (a - 1) + (a - 1) * (a - 2))
-                return deg * Math.PI / 180
+                return Math.min(70, 28 * a) * Math.PI / 180
             }
             // Eye distance for the perspective divide: smaller is more dramatic.
             readonly property real flowDepth: flowW * 1.86
             // Centre offset of a card `a` slots out, in flowW: the first
-            // neighbour sits a full card away, then each gap shrinks by 0.71,
+            // neighbour sits a full card away, then each gap shrinks by 0.42,
             // which puts the third card over the orbit's end (hiding its tip).
             function flowX(r: real): real {
                 const a = Math.abs(r)
-                const x = a <= 1 ? 0.99 * a : 0.99 + 0.57 * (1 - Math.pow(0.71, a - 1)) / 0.29
+                const x = a <= 1 ? 0.99 * a : 0.99 + 0.57 * (1 - Math.pow(0.42, a - 1)) / 0.58
                 return Math.sign(r) * x * flowW
             }
             // The orbit ring the cards are mounted on, seen from above: it
             // crosses every card at the same relative height (`orbitDrop`
             // below the centre at full scale), so cards rise along the ring's
             // front arc as they move out toward its ends.
-            readonly property real orbitA: Math.min(flowW * 2.0, width / 2 - 80)
+            readonly property real orbitA: Math.min(flowW * 1.83, width / 2 - 80)
             readonly property real orbitB: flowH * 0.15
             readonly property real orbitDrop: flowH * 0.25
             function flowRise(r: real): real {
@@ -896,9 +895,9 @@ Window {
                     : Math.max(0.35, 0.56 - 0.1 * (a - 2))
             }
             // Horizontal-only squeeze: the end cards (three slots out) read as
-            // thin slivers closing the ring.
+            // narrow panels closing the ring.
             function flowThin(a: real): real {
-                return 1 - 0.4 * Math.max(0, Math.min(1, a - 2))
+                return 1 - 0.2 * Math.max(0, Math.min(1, a - 2))
             }
             // Item-space matrix for a w x h card at `r`: shear (fading out as
             // flow fades in), flow scale and thinning, rotation about the
