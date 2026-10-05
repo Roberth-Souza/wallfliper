@@ -20,15 +20,14 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from . import cachegc
 from .library import WallpaperEntry
 from .state import WallpaperKind, cache_dir
-
 
 PreviewStrategy = Callable[[Path, Path], bool]
 
@@ -39,12 +38,14 @@ _CAP_BYTES = 100 * 1024 * 1024
 
 # Preview clip shape: short, modest framerate — enough to convey motion while
 # staying light to encode/decode (it's animated, so a big bump costs CPU per
-# frame, not just disk). The focused card is ~570px wide, so ~720px fills it at
-# 1x without the old upscale blur; raising this further mainly helps HiDPI.
+# frame, not just disk). Sized by height: cards are portrait and crop-fill, so
+# the card height is the axis that scales the clip (the flow card is ~0.56 of
+# the screen height, ~605px at 1080p). Width-keyed 720px clips were only 405px
+# tall and got upscaled ~1.5x there.
 _START_SECONDS = "1"   # skip a possible black/fade-in opening frame
 _DURATION_SECONDS = "3"
-_PREVIEW_WIDTH = 720
-_PREVIEW_FILTER = f"fps=15,scale={_PREVIEW_WIDTH}:-2"
+_PREVIEW_HEIGHT = 720
+_PREVIEW_FILTER = f"fps=15,scale=-2:{_PREVIEW_HEIGHT}"
 
 
 def _video_preview_strategy(src: Path, dest: Path) -> bool:
@@ -66,6 +67,7 @@ def _video_preview_strategy(src: Path, dest: Path) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
+            check=False,
             timeout=60,  # a stuck ffmpeg must not hold a worker forever
         )
     except (subprocess.SubprocessError, OSError):
@@ -80,9 +82,9 @@ def _video_preview_strategy(src: Path, dest: Path) -> bool:
 
 def _cache_path(src: Path) -> Path:
     stat = src.stat()
-    # Width is in the key so a resolution change re-encodes instead of serving a
+    # Height is in the key so a resolution change re-encodes instead of serving a
     # stale clip (mirrors the thumbnail cache keying on its target size).
-    key = f"{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{_PREVIEW_WIDTH}"
+    key = f"{src.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|h{_PREVIEW_HEIGHT}"
     digest = hashlib.sha1(key.encode()).hexdigest()
     return _PREVIEW_DIR / f"{digest}.webp"
 
@@ -109,7 +111,7 @@ class _PreviewWorker(QRunnable):
                 self._signals.failed.emit(str(src))
                 return
             self._signals.ready.emit(str(src), str(dest))
-        except Exception:  # a single bad file must not kill the pool
+        except Exception:  # noqa: BLE001 — a single bad file must not kill the pool
             self._signals.failed.emit(str(src))
 
 
