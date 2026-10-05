@@ -20,6 +20,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, Signal
 from PySide6.QtGui import QImage, QImageReader
 
+from . import cachegc
 from .library import WallpaperEntry
 from .state import WallpaperKind, cache_dir
 
@@ -32,6 +33,8 @@ _THUMB_DIR = cache_dir() / "thumbnails"
 # `_THUMB_SIZE`), which sizes thumbnails for the carousel cards.
 _DEFAULT_SIZE = QSize(360, 360)
 _MAX_WORKERS = 4
+# Bounds what other wallpaper folders keep; the current library is never evicted.
+_CAP_BYTES = 200 * 1024 * 1024
 
 
 def _image_strategy(src: Path, dest: Path, size: QSize) -> bool:
@@ -174,6 +177,10 @@ class ThumbnailLoader(QObject):
     def cache_path(self, entry: WallpaperEntry) -> Path:
         """Disk path where this entry's thumbnail is (or will be) cached."""
         return _cache_path(entry.path, self._size)
+
+    def prune(self, library: list[Path]) -> None:
+        """Drop orphaned thumbnails (blocking — call from a pool thread)."""
+        cachegc.prune(_THUMB_DIR, library, lambda src: _cache_path(src, self._size), _CAP_BYTES)
 
     def request(self, entry: WallpaperEntry) -> None:
         """Queue a thumbnail for `entry` (no-op if unsupported or in-flight)."""

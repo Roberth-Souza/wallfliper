@@ -21,10 +21,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from . import cachegc
 from .state import cache_dir
 
 _FRAME_DIR_NAME = "firstframes"
 _EXTRACT_TIMEOUT_S = 30  # a stuck ffmpeg must not block the apply forever
+# Bounds what other wallpaper folders keep; the current library is never evicted.
+_CAP_BYTES = 200 * 1024 * 1024
 
 
 def first_frame(video: Path, cached_only: bool = False) -> Path | None:
@@ -92,3 +95,8 @@ def _cache_path(video: Path) -> Path:
     key = f"{video.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
     digest = hashlib.sha1(key.encode()).hexdigest()
     return cache_dir() / _FRAME_DIR_NAME / f"{digest}.png"
+
+
+def prune_first_frames(videos: list[Path]) -> None:
+    """Drop orphaned stills (blocking — call from a pool thread)."""
+    cachegc.prune(cache_dir() / _FRAME_DIR_NAME, videos, _cache_path, _CAP_BYTES)
