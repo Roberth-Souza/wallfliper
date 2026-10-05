@@ -288,6 +288,8 @@ Window {
         focus: true
 
         Keys.onPressed: (event) => {
+            if (win.hive)
+                win.hive.pointerActive = false
             // Esc always exits immediately, in any mode.
             if (event.key === Qt.Key_Escape) {
                 if (win.searching)

@@ -193,8 +193,25 @@ Item {
     }
     onWidthChanged: if (placed) Qt.callLater(() => revealSlot(grid.currentIndex, false))
 
+    // One highlight at a time, owned by the last input used: the white
+    // focus outline while the keyboard (or wheel) drives, the grey hover
+    // outline once the mouse moves. Main hands it back on any key press.
+    // Only real pointer motion counts: keyboard scrolling slides cells under
+    // a resting cursor, but the cursor's scene position stays put.
+    property bool pointerActive: false
+    HoverHandler {
+        property point last: Qt.point(NaN, NaN)
+        onPointChanged: {
+            const p = point.scenePosition
+            if (!isNaN(last.x) && (p.x !== last.x || p.y !== last.y))
+                hive.pointerActive = true
+            last = p
+        }
+    }
+
     WheelHandler {
         onWheel: (event) => {
+            hive.pointerActive = false
             if (event.angleDelta.y < 0 || event.angleDelta.x < 0)
                 hive.moveColumn(1)
             else if (event.angleDelta.y > 0 || event.angleDelta.x > 0)
@@ -241,9 +258,10 @@ Item {
             width: hive.hexW
             height: hive.cellH
             // Passive mouse highlight: a grey outline that never moves focus.
-            readonly property bool hovered: pointer.containsMouse && !selected
+            readonly property bool hovered: hive.pointerActive && pointer.containsMouse
+            readonly property bool outlined: hive.pointerActive ? hovered : selected
             // The outline overhangs into the seam; keep it above neighbours.
-            z: selected ? 2 : hovered ? 1 : 0
+            z: outlined ? 1 : 0
             transform: Translate {
                 y: Math.floor(cell.index / hive.rows) % 2 ? hive.cellH / 2 : 0
             }
@@ -297,8 +315,8 @@ Item {
                         0, hex.cover, 0, (hex.height - hex.texH * hex.cover) / 2,
                         0, 0, 1, 0,
                         0, 0, 0, 1)
-                    strokeColor: cell.selected ? Theme.frame : Theme.muted
-                    strokeWidth: cell.selected || cell.hovered ? Theme.frameWidth : -1
+                    strokeColor: cell.hovered ? Theme.muted : Theme.frame
+                    strokeWidth: cell.outlined ? Theme.frameWidth : -1
                     joinStyle: ShapePath.MiterJoin
 
                     startX: hex.cx - hex.r; startY: hex.cy
