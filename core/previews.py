@@ -25,6 +25,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
+from . import cachegc
 from .library import WallpaperEntry
 from .state import WallpaperKind, cache_dir
 
@@ -33,6 +34,8 @@ PreviewStrategy = Callable[[Path, Path], bool]
 
 _PREVIEW_DIR = cache_dir() / "previews"
 _MAX_WORKERS = 2  # encoding is heavier than thumbs; previews fire one at a time
+# Bounds what other wallpaper folders keep; the current library is never evicted.
+_CAP_BYTES = 100 * 1024 * 1024
 
 # Preview clip shape: short, modest framerate — enough to convey motion while
 # staying light to encode/decode (it's animated, so a big bump costs CPU per
@@ -134,6 +137,10 @@ class PreviewLoader(QObject):
     def cache_path(self, entry: WallpaperEntry) -> Path:
         """Disk path where this entry's preview is (or will be) cached."""
         return _cache_path(entry.path)
+
+    def prune(self, library: list[Path]) -> None:
+        """Drop orphaned previews (blocking — call from a pool thread)."""
+        cachegc.prune(_PREVIEW_DIR, library, _cache_path, _CAP_BYTES)
 
     def request(self, entry: WallpaperEntry) -> None:
         """Queue a preview for `entry` (no-op if unsupported or in-flight)."""

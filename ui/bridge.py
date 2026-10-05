@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import os
 import random
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 from PySide6.QtCore import (
     Property,
+    QFile,
     QModelIndex,
     QObject,
     QPersistentModelIndex,
@@ -35,12 +38,19 @@ from core.backends import (
 )
 from core.backends.base import ImageTransition
 from core.colors import PALETTE, PALETTE_NAMES, ColorLoader, ColorLookup
-from core.firstframe import first_frame
+from core.firstframe import first_frame, prune_first_frames
 from core.integrations import notify_color_tools
 from core.library import WallpaperEntry, scan
 from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
-from core.state import Config, load_config, load_state, save_config, save_state
+from core.state import (
+    Config,
+    WallpaperKind,
+    load_config,
+    load_state,
+    save_config,
+    save_state,
+)
 from core.thumbnails import ThumbnailLoader
 
 from . import shaders
@@ -148,6 +158,27 @@ class _FirstFrameWarmer(QRunnable):
         self._signals.finished.emit(str(self._path), ok)
 
 
+class _CachePruner(QRunnable):
+    """Collect orphaned cache files off the UI thread (core/cachegc.py)."""
+
+    def __init__(
+        self, thumbs: ThumbnailLoader, previews: PreviewLoader, library: list[WallpaperEntry]
+    ) -> None:
+        super().__init__()
+        self._thumbs = thumbs
+        self._previews = previews
+        self._library = library
+
+    def run(self) -> None:  # executed on a pool thread
+        with suppress(OSError):  # cache cleanup is best-effort
+            self._thumbs.prune(self._paths(self._thumbs.supports))
+            self._previews.prune(self._paths(self._previews.supports))
+            prune_first_frames(self._paths(lambda kind: kind == "video"))
+
+    def _paths(self, accepts: Callable[[WallpaperKind], bool]) -> list[Path]:
+        return [entry.path for entry in self._library if accepts(entry.kind)]
+
+
 class Controller(QObject):
     statusChanged = Signal()
     wallpaperDirChanged = Signal()
@@ -202,6 +233,8 @@ class Controller(QObject):
         self._warming: set[str] = set()  # extraction currently in flight
         self._warm_signals = _WarmSignals(self)
         self._warm_signals.finished.connect(self._on_warm_finished)
+        self._gc_pool = QThreadPool(self)
+        self._gc_pool.setMaxThreadCount(1)
         # Wallpaper waiting on a shader-painted switch: set when the surface is
         # asked for, applied once it covers the screen, cleared when it is done.
         self._pending_shader: WallpaperEntry | None = None
@@ -429,35 +462,25 @@ class Controller(QObject):
 
     @Slot(int)
     def deleteWallpaper(self, proxy_row: int) -> None:
-        """Permanently delete the wallpaper file and drop its card. No undo:
-        Shift+D is a deliberate two-hand chord, so no confirmation dialog.
-        Cached thumbnail/preview are removed too so they don't linger orphaned.
+        """Move the wallpaper file to the trash and drop its card.
+
+        No confirmation (Shift+D is a deliberate two-hand chord), so the trash
+        is the undo. Never falls back to a permanent delete when the file
+        can't be trashed. Its cached thumbnail/preview/first frame are left to
+        the next reload's cache GC, so restoring the file before then keeps them.
         """
         source = self._proxy.mapToSource(self._proxy.index(proxy_row, 0))
         entry = self._model.entry_at(source)
         if entry is None:
             return
-        # Cache paths key on the source file's stat (mtime+size), so they must
-        # be resolved while the file still exists — after unlink they raise.
-        try:
-            stale = (self._loader.cache_path(entry), self._previews.cache_path(entry))
-        except OSError:
-            stale = ()  # source already gone; nothing to key the caches with
-        try:
-            entry.path.unlink(missing_ok=True)
-        except OSError as exc:
-            self._set_status(f"⚠ delete failed: {exc}")
+        if not QFile(str(entry.path)).moveToTrash():
+            self._set_status(f"⚠ couldn't move {entry.name} to trash")
             return
         self._model.remove_row(source.row())
         key = str(entry.path)
         self._warmed.discard(key)
         self._warming.discard(key)
-        for cached in stale:
-            try:
-                cached.unlink(missing_ok=True)
-            except OSError:
-                pass  # cache cleanup is best-effort
-        self._set_status(f"✗ deleted {entry.name}")
+        self._set_status(f"✗ trashed {entry.name}")
 
     @Slot(result=bool)
     def folderPortalAvailable(self) -> bool:
@@ -532,6 +555,9 @@ class Controller(QObject):
         directory = self._config.wallpaper_path
         entries = scan(directory) if directory else []
         self._model.set_entries(entries)
+        self._gc_pool.start(
+            _CachePruner(self._loader, self._previews, entries)
+        )
         self._warmed.clear()
         self._warming.clear()
         # New library, new sweep — but only re-kick it right away if a color

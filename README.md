@@ -134,7 +134,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `r` | **Select a random wallpaper** (doesn't apply it) |
 | `t` | Switch card layout: **push** → **overlay** → **flow** (remembered) |
-| `Shift+D` | **Delete** the selected wallpaper file (permanent, no confirmation) |
+| `Shift+D` | **Delete** the selected wallpaper file (moved to the trash, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
 | Double-click | Apply and close |
 | Click outside the cards | Close |
