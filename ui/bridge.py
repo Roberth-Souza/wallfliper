@@ -54,7 +54,7 @@ from core.state import (
 from core.thumbnails import ThumbnailLoader
 
 from . import shaders
-from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, WallpaperModel
+from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, RingModel, WallpaperModel
 
 # Fit-within box for cached card thumbnails. The carousel supersamples each card
 # (decodes at ~2x its on-screen height) for crispness, so the cache needs enough
@@ -63,7 +63,7 @@ from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, WallpaperModel
 # sourceSize, so this sets the disk-cache ceiling, not per-card RAM.
 _THUMB_SIZE = QSize(1920, 1920)
 
-_CARD_LAYOUTS = ("push", "overlay", "flow")
+_CARD_LAYOUTS = ("push", "overlay", "flow", "honeycomb")
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -203,6 +203,7 @@ class Controller(QObject):
         self._model = WallpaperModel(self._loader, self._previews, self)
         self._proxy = _WallpaperFilterProxy(self)
         self._proxy.setSourceModel(self._model)
+        self._ring = RingModel(self._proxy, self)
         # Exclusive kind filter: "all" | "image" | "video". One mode at a time;
         # each keybind sets its mode idempotently (no per-kind toggling).
         self._kind_filter = "all"
@@ -246,6 +247,11 @@ class Controller(QObject):
     def model(self) -> QSortFilterProxyModel:
         return self._proxy
 
+    @Property(QObject, constant=True)
+    def ringModel(self) -> RingModel:
+        """The filtered model repeated end to end, for the endless honeycomb."""
+        return self._ring
+
     @Property(str, notify=statusChanged)
     def status(self) -> str:
         return self._status
@@ -266,7 +272,7 @@ class Controller(QObject):
 
     @Property(str, notify=cardLayoutChanged)
     def cardLayout(self) -> str:
-        """Carousel style: "push", "overlay" or "flow" (unknown values read as push)."""
+        """Card layout: "push", "overlay", "flow" or "honeycomb" (unknown reads as push)."""
         layout = self._config.card_layout
         return layout if layout in _CARD_LAYOUTS else "push"
 

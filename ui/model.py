@@ -15,11 +15,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import (
+    Property,
+    QAbstractItemModel,
     QAbstractListModel,
     QByteArray,
     QModelIndex,
+    QObject,
     QPersistentModelIndex,
     Qt,
+    Signal,
 )
 
 from core.library import WallpaperEntry
@@ -31,6 +35,7 @@ from core.thumbnails import ThumbnailLoader
 # declares, or type-checkers flag an incompatible override (LSP: a subclass
 # may not narrow what a method accepts). Both types expose .isValid()/.row().
 _Index = QModelIndex | QPersistentModelIndex
+_NO_PARENT = QModelIndex()
 
 NAME_ROLE = Qt.ItemDataRole.UserRole + 1
 PATH_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -120,7 +125,7 @@ class WallpaperModel(QAbstractListModel):
             PREVIEW_ROLE: QByteArray(b"preview"),
         }
 
-    def rowCount(self, parent: _Index = QModelIndex()) -> int:
+    def rowCount(self, parent: _Index = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self._entries)
 
     def data(self, index: _Index, role: int = Qt.ItemDataRole.DisplayRole):
@@ -205,3 +210,83 @@ class WallpaperModel(QAbstractListModel):
         self._preview_uri[path] = Path(preview).as_uri()
         idx = self.index(row)
         self.dataChanged.emit(idx, idx, [PREVIEW_ROLE])
+
+
+class RingModel(QAbstractListModel):
+    """A list model repeated `laps` times end to end.
+
+    Backs the honeycomb grid's endless scroll: QML views need a finite model,
+    so the grid walks a few copies of the library and jumps between identical
+    copies before it reaches either end. Row r shows source row r % count.
+    Structural source changes reset the ring (every lap shifts at once);
+    data changes are fanned out to every copy of the row.
+    """
+
+    lapsChanged = Signal()
+    sourceCountChanged = Signal()
+
+    def __init__(
+        self, source: QAbstractItemModel, parent: QObject | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._source = source
+        self._laps = 1
+        for begin, end in (
+            (source.modelAboutToBeReset, source.modelReset),
+            (source.rowsAboutToBeInserted, source.rowsInserted),
+            (source.rowsAboutToBeRemoved, source.rowsRemoved),
+            (source.rowsAboutToBeMoved, source.rowsMoved),
+            (source.layoutAboutToBeChanged, source.layoutChanged),
+        ):
+            begin.connect(self._begin_reset)
+            end.connect(self._end_reset)
+        source.dataChanged.connect(self._on_data_changed)
+
+    def _begin_reset(self, *_args: object) -> None:
+        self.beginResetModel()
+
+    def _end_reset(self, *_args: object) -> None:
+        self.endResetModel()
+        self.sourceCountChanged.emit()
+
+    def _on_data_changed(
+        self, top: QModelIndex, bottom: QModelIndex, roles: list[int]
+    ) -> None:
+        n = self._source.rowCount()
+        for lap in range(self._laps):
+            self.dataChanged.emit(
+                self.index(lap * n + top.row()),
+                self.index(lap * n + bottom.row()),
+                roles,
+            )
+
+    def _get_laps(self) -> int:
+        return self._laps
+
+    def _set_laps(self, laps: int) -> None:
+        laps = max(1, laps)
+        if laps == self._laps:
+            return
+        self.beginResetModel()
+        self._laps = laps
+        self.endResetModel()
+        self.lapsChanged.emit()
+
+    laps = Property(int, _get_laps, _set_laps, notify=lapsChanged)
+
+    def _get_source_count(self) -> int:
+        return self._source.rowCount()
+
+    sourceCount = Property(int, _get_source_count, notify=sourceCountChanged)
+
+    def roleNames(self) -> dict:
+        return self._source.roleNames()
+
+    def rowCount(self, parent: _Index = _NO_PARENT) -> int:
+        return 0 if parent.isValid() else self._source.rowCount() * self._laps
+
+    def data(self, index: _Index, role: int = Qt.ItemDataRole.DisplayRole):
+        n = self._source.rowCount()
+        if not index.isValid() or n == 0:
+            return None
+        return self._source.data(self._source.index(index.row() % n, 0), role)

@@ -80,24 +80,56 @@ Window {
     property bool searching: false
     onSearchTextChanged: {
         controller.setFilter(searchText)
-        carousel.focusIndex(carousel.count > 0 ? 0 : -1)
+        win.focusIndex(carousel.count > 0 ? 0 : -1)
+    }
+
+    // Honeycomb is its own view (a hex grid, not the PathView strip), so the
+    // focused row lives in whichever view is active; the other one is synced
+    // only when `t` switches between them.
+    readonly property bool honeycomb: controller.cardLayout === "honeycomb"
+    // Honeycomb only: gap between the screen edges and the bar / color strip.
+    readonly property real edgeMargin: 24
+    property real hiveAmount: honeycomb ? 1 : 0
+    Behavior on hiveAmount { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    readonly property Honeycomb hive: hiveLoader.item as Honeycomb
+    readonly property int currentIndex:
+        honeycomb && hive ? hive.currentIndex : carousel.currentIndex
+    onHoneycombChanged: if (!honeycomb && hive) carousel.snapIndex(hive.currentIndex)
+
+    function focusIndex(i: int): void {
+        if (honeycomb && win.hive)
+            win.hive.focusIndex(i, false)
+        else
+            carousel.focusIndex(i)
+    }
+
+    // dx: a/d, h/l, Left/Right. dy: w/s, k/j, Up/Down. The strip has one
+    // axis, so both step it; the grid moves by column or by row.
+    function navigate(dx: int, dy: int, chained: bool): void {
+        if (honeycomb && win.hive) {
+            if (dx !== 0)
+                win.hive.moveColumn(dx)
+            else
+                win.hive.moveRow(dy)
+        } else
+            carousel.scrollBy(dx + dy, chained)
     }
 
     // Space: apply but keep the overlay open, so you can audition wallpapers
     // live on the real desktop and keep browsing.
     function applyCurrent() {
-        if (carousel.currentIndex >= 0)
-            controller.apply(carousel.currentIndex)
+        if (win.currentIndex >= 0)
+            controller.apply(win.currentIndex)
     }
 
     function applyAndExit() {
-        if (carousel.currentIndex < 0)
+        if (win.currentIndex < 0)
             return
         // A shader switch is painted by our own surface and only applies the
         // wallpaper once that surface covers the screen — quitting here would
         // kill it mid-flight and set nothing. Hide instead (which releases the
         // keyboard grab, so it feels like closing) and exit when it lands.
-        if (controller.apply(carousel.currentIndex)) {
+        if (controller.apply(win.currentIndex)) {
             win.quitAfterTransition = true
             win.visible = false
         } else {
@@ -282,12 +314,12 @@ Window {
                     } else
                         win.exitSearchKeep()
                 }
-                else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left) {
+                else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down
+                         || event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
                     win.exitSearchKeep()
-                    carousel.scrollBy(-1, event.isAutoRepeat)
-                } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Right) {
-                    win.exitSearchKeep()
-                    carousel.scrollBy(1, event.isAutoRepeat)
+                    win.navigate(event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0,
+                                 event.key === Qt.Key_Up ? -1 : event.key === Qt.Key_Down ? 1 : 0,
+                                 event.isAutoRepeat)
                 } else if (event.text === "/")
                     win.exitSearchClear()  // press `/` again to leave and clear
                 else if (event.key === Qt.Key_Backspace) {
@@ -340,7 +372,8 @@ Window {
             else if (event.text === "c")
                 win.enterColorMode()                // color filter strip
             else if (event.text === "r")
-                carousel.selectRandom()             // jump to a random card
+                win.honeycomb && win.hive
+                    ? win.hive.selectRandom() : carousel.selectRandom()
             else if (event.text === "t")
                 controller.setCardLayout(carousel.nextLayout[controller.cardLayout] ?? "push")
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
@@ -349,15 +382,17 @@ Window {
                 // claims plain `d`. The next card slides into the centre
                 // (ListView keeps the numeric currentIndex, which now names
                 // the following row; onCountChanged re-centres it).
-                if (carousel.currentIndex >= 0)
-                    controller.deleteWallpaper(carousel.currentIndex)
+                if (win.currentIndex >= 0)
+                    controller.deleteWallpaper(win.currentIndex)
             }
-            else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K
-                     || event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
-                carousel.scrollBy(-1, event.isAutoRepeat)
-            else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J
-                     || event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
-                carousel.scrollBy(1, event.isAutoRepeat)
+            else if (event.key === Qt.Key_Up || event.key === Qt.Key_W || event.key === Qt.Key_K)
+                win.navigate(0, -1, event.isAutoRepeat)
+            else if (event.key === Qt.Key_Down || event.key === Qt.Key_S || event.key === Qt.Key_J)
+                win.navigate(0, 1, event.isAutoRepeat)
+            else if (event.key === Qt.Key_Left || event.key === Qt.Key_A || event.key === Qt.Key_H)
+                win.navigate(-1, 0, event.isAutoRepeat)
+            else if (event.key === Qt.Key_Right || event.key === Qt.Key_D || event.key === Qt.Key_L)
+                win.navigate(1, 0, event.isAutoRepeat)
             else
                 return
             event.accepted = true
@@ -373,8 +408,11 @@ Window {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: carousel.top
             // Flow cards outgrow the band; the bar rides up to clear them and
-            // the crosshair above the focused card.
-            anchors.bottomMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
+            // the crosshair above the focused card. Honeycomb fills the
+            // screen, so the bar slides to its top edge.
+            readonly property real bandMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
+            anchors.bottomMargin: bandMargin
+                + (carousel.y - win.edgeMargin - height - bandMargin) * win.hiveAmount
             width: Math.max(320, promptRow.implicitWidth + 40)
             height: promptRow.implicitHeight + 22
             color: Theme.bg
@@ -540,6 +578,9 @@ Window {
             height: Math.min(Math.round(win.height * 0.40), 480)
             // Flow cards (and the focused card's glow) outgrow the band.
             clip: flowAmount <= 0
+            // Cross-fades with the honeycomb grid, which replaces it.
+            opacity: 1 - win.hiveAmount
+            visible: opacity > 0
             // No drag/flick: movement is keyboard + wheel only, so the wheel
             // can't fight the built-in flick and desync the centered selection.
             interactive: false
@@ -662,6 +703,13 @@ Window {
                 glide.stop()
                 bounce.stop()
                 currentIndex = i
+            }
+            // Back from honeycomb: land on the grid's card without sweeping
+            // the strip there (same trick as the launch snap).
+            function snapIndex(i: int): void {
+                _primed = false
+                focusIndex(i)
+                Qt.callLater(() => _primed = true)
             }
             // Click: in push mode, glide the shortest way round to the card as
             // one burst; overdraw mode snaps by index like before.
@@ -842,7 +890,8 @@ Window {
                 if (!pushNeighbors && currentItem && !sweeping)
                     currentItem.expanded = true
             }
-            readonly property var nextLayout: ({ push: "overlay", overlay: "flow", flow: "push" })
+            readonly property var nextLayout:
+                ({ push: "overlay", overlay: "flow", flow: "honeycomb", honeycomb: "push" })
 
             // Flow: a cover-flow arc. The focused card faces the viewer; the
             // rest turn about their vertical axis toward the centre, shrink,
@@ -1294,6 +1343,33 @@ Window {
             }
         }
 
+        // ---- Honeycomb: the full-screen hex grid that replaces the strip in
+        // the `honeycomb` layout. Lazy: it exists only while that layout is
+        // on or still fading out. Opens on the strip's focused card; the
+        // callLater lets the carousel's own launch focus land first.
+        Loader {
+            id: hiveLoader
+            anchors.fill: parent
+            // Bar above, color strip below: one reserve on both edges, sized
+            // for the taller of the two so the grid stays centred.
+            readonly property real edgeReserve:
+                win.edgeMargin + Math.max(topBar.height, colorBar.height) + 16
+            anchors.topMargin: edgeReserve
+            anchors.bottomMargin: edgeReserve
+            active: win.honeycomb || win.hiveAmount > 0
+            opacity: win.hiveAmount
+            sourceComponent: Honeycomb {
+                model: controller.ringModel
+                onPreviewRequested: (index) => controller.ensurePreview(index)
+                onCellClicked: if (win.searching) win.exitSearchKeep()
+                onCellActivated: win.applyAndExit()
+            }
+            onLoaded: Qt.callLater(() => {
+                if (win.hive)
+                    win.hive.focusIndex(carousel.currentIndex, false)
+            })
+        }
+
         // ---- Color filter strip: a framed bar of mini sheared swatch-cards
         // below the carousel, mirroring the floating bar above it. On-demand
         // chrome: hidden until `c` opens color mode, kept while a filter is
@@ -1305,7 +1381,10 @@ Window {
             id: colorBar
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: carousel.bottom
-            anchors.topMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
+            readonly property real bandMargin: 24 + (carousel.flowOverhang - 24) * carousel.flowAmount
+            anchors.topMargin: bandMargin
+                + (parent.height - carousel.y - carousel.height - win.edgeMargin - height
+                   - bandMargin) * win.hiveAmount
             width: swatchRow.implicitWidth + 28
             height: swatchRow.implicitHeight + 20
             color: Theme.bg
