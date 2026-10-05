@@ -856,6 +856,12 @@ Window {
             Behavior on flowAmount { NumberAnimation { duration: 360; easing.type: Easing.OutCubic } }
             readonly property real flowH: Math.round(win.height * 0.56)
             readonly property real flowW: Math.round(flowH * 0.585)
+            // The focused flow card widens after expandDelay, but only until
+            // its edges reach the first neighbours' centres: it overdraws half
+            // of each instead of opening the arc (neighbours never move).
+            readonly property real flowWideMax: Math.round(2 * flowX(1))
+            readonly property int flowWidenInDuration: 300
+            readonly property int flowWidenOutDuration: 150
             // Crosshair arm length above/below the focused card.
             readonly property real flowReach: Math.round(win.height * 0.08)
             // How far the bar / color strip move off the band edges in flow.
@@ -1114,6 +1120,22 @@ Window {
                 readonly property real expandedW:
                     Math.min(Math.round(carousel.cardH * imgAspect),
                              Math.round(carousel.width * 0.64))
+                // Flow width target: the wallpaper's aspect at flow height,
+                // capped by flowWideMax; portrait art never goes below flowW.
+                readonly property real flowWideW: Math.max(carousel.flowW,
+                    Math.min(Math.round(carousel.flowH * imgAspect), carousel.flowWideMax))
+                property real flowWiden: selected && expanded ? carousel.expandAmount : 0
+                Behavior on flowWiden {
+                    id: flowWidenBehavior
+                    enabled: carousel.flowAmount > 0
+                    NumberAnimation {
+                        duration: flowWidenBehavior.targetValue > 0
+                            ? carousel.flowWidenInDuration : carousel.flowWidenOutDuration
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                readonly property real flowCardW:
+                    carousel.flowW + (flowWideW - carousel.flowW) * flowWiden
 
                 Rectangle {
                     id: cardVisual
@@ -1127,13 +1149,14 @@ Window {
                     x: (cell.width - width) / 2 + cell.push + cell.flowShift
                     // Push mode binds size to position; overdraw mode leaves
                     // the idle size here and animates via the states below.
-                    // Flow cards share one size (depth is in the matrix).
+                    // Flow cards share one size (depth is in the matrix), bar the
+                    // focused card's delayed widen (flowCardW).
                     readonly property real baseW:
                         carousel.pushNeighbors ? carousel.idleW + cell.growth : carousel.idleW
                     readonly property real baseH: carousel.pushNeighbors
                         ? carousel.idleH + (carousel.cardH - carousel.idleH) * cell.near
                         : carousel.idleH
-                    width: baseW + (carousel.flowW - baseW) * carousel.flowAmount
+                    width: baseW + (cell.flowCardW - baseW) * carousel.flowAmount
                     height: baseH + (carousel.flowH - baseH) * carousel.flowAmount
                     color: "#161616"
                     border.color: cell.selected ? Theme.frame
@@ -1156,7 +1179,7 @@ Window {
                             when: !carousel.pushNeighbors && cell.selected && !cell.expanded
                             PropertyChanges {
                                 cardVisual.width: carousel.poppedW
-                                    + (carousel.flowW - carousel.poppedW) * carousel.flowAmount
+                                    + (cell.flowCardW - carousel.poppedW) * carousel.flowAmount
                                 cardVisual.height: carousel.cardH
                                     + (carousel.flowH - carousel.cardH) * carousel.flowAmount
                             }
@@ -1166,7 +1189,7 @@ Window {
                             when: !carousel.pushNeighbors && cell.selected && cell.expanded
                             PropertyChanges {
                                 cardVisual.width: cell.expandedW
-                                    + (carousel.flowW - cell.expandedW) * carousel.flowAmount
+                                    + (cell.flowCardW - cell.expandedW) * carousel.flowAmount
                                 cardVisual.height: carousel.cardH
                                     + (carousel.flowH - carousel.cardH) * carousel.flowAmount
                             }

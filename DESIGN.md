@@ -26,7 +26,7 @@ When in doubt, remove. Every pixel of chrome must justify itself.
 
 ## Flow layout (the dramatic exception)
 The `flow` card layout (third in the `t` cycle) is a deliberate opt-in exception to the flat/no-ornament hard rules — a cover-flow arc in perspective, styled after a "dramatic" hero mockup. Inside flow only:
-- Cards are **unsheared** rectangles turned in 3D about their vertical axis, shrinking, darkening and fading with distance; spaced, not glued. The focused card faces the viewer, portrait, with **no** landscape widen.
+- Cards are **unsheared** rectangles turned in 3D about their vertical axis, shrinking, darkening and fading with distance; spaced, not glued. The focused card faces the viewer, portrait; after the same settle delay as the other layouts it widens a little toward the wallpaper's aspect — only until its edges reach the first neighbours' centres, overdrawing half of each. Neighbours never move and the arc never opens.
 - The focused card gets a soft white **glow** (the white frame language, blurred).
 - A thin grey **orbit ellipse** runs behind the cards, white **chevrons** (clickable, ‹ ›) sit at its ends, and a **crosshair** hairline (ticked) runs from the floating bar to the focused card and on below it.
 - Still monochrome, still sharp corners, still keyboard-first. Not added: counters, index lists, pagination dots, hint text, background art, floor reflection.
