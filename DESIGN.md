@@ -33,6 +33,15 @@ The `flow` card layout (third in the `t` cycle) is a deliberate opt-in exception
 
 Everything above stays forbidden in `push` and `overlay`; flow decoration must never leak into them.
 
+## Honeycomb layout (the full-screen exception)
+The `honeycomb` card layout (fourth in the `t` cycle) trades the carousel band for a **full-screen grid of flat-top hexagons**, 4 per column, filled column by column and scrolled sideways. Inside honeycomb only:
+- The grid fills the screen between the floating bar (which slides to the top edge) and the color strip's slot at the bottom; columns are full-bleed and cut by the screen edges.
+- Odd columns sit half a row lower so the cells interlock, with a thin even seam of desktop (a few px) between every pair of neighbours. No borders on idle cells.
+- Focus is the **white outline only**: no pop, no widen, no lift. The cell under the mouse gets a **grey** outline — a passive hover cue that never moves focus, never starts a preview and never lifts the cell (the one place hover shows anything). **One highlight at a time**, owned by the last input: moving the mouse hides the focus outline and shows the hover one; any key press (or the wheel, which steps focus) hides the hover outline and brings the focus outline back. Cells sliding under a resting cursor during keyboard scrolling don't count as mouse movement. The focused cell is not pinned to the centre; the view scrolls just enough to keep it (plus one neighbour column) on screen.
+- Two axes: `w/s`, `k/j`, Up/Down step within the column (running on into the next one); `a/d`, `h/l`, Left/Right jump to the neighbouring column.
+- **Endless**, like the carousel strip: whenever the library is wider than the screen, the grid scrolls forever in both directions and the last wallpaper runs straight into the first — no end, no seam. A library that fits on screen stays one centred copy (nothing to scroll); navigation there wraps from the last column to the first. A library only just wider than the screen may show the same wallpaper in both edge slivers — accepted, the honeycomb repeats by nature.
+- Still monochrome, still keyboard-first; no flow decoration (orbit, chevrons, glow).
+
 ## Anti-goals
 - Not Electron. Not a "modern app" look. Not Material. Not rounded-everything.
 - No onboarding, no splash screen, no branding moment.
