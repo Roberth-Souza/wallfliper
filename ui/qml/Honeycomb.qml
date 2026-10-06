@@ -23,7 +23,7 @@ Item {
     readonly property int currentIndex:
         n > 0 && grid.currentIndex >= 0 ? grid.currentIndex % n : -1
 
-    readonly property int rows: 4
+    readonly property int rows: 3
     readonly property real gap: 4
 
     signal previewRequested(int index)
