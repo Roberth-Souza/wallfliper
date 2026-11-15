@@ -20,6 +20,10 @@ from PySide6.QtCore import QUrl
 
 SHADER_DIR = Path(__file__).resolve().parent / "qml" / "shaders"
 _SUFFIX = ".frag.qsb"
+# config.transition_duration is tuned for one-move animations. These play in
+# stages (draw the outline, then grow; seed, then spread) and read as rushed
+# at the same length, so they run this many times longer.
+_DURATION_SCALE = {"silhouette": 2.6, "colonies": 1.6}
 
 
 def path_for(name: str) -> Path | None:
@@ -48,3 +52,8 @@ def names() -> tuple[str, ...]:
 def is_shader(name: str) -> bool:
     """True if `name` is a shader transition that can actually be drawn."""
     return path_for(name) is not None
+
+
+def duration_scale(name: str) -> float:
+    """How much longer than config.transition_duration `name` should run."""
+    return _DURATION_SCALE.get(name, 1.0)

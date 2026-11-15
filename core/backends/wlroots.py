@@ -235,6 +235,12 @@ class WlrootsBackend(WallpaperBackend):
             self._kill_pids(old_pids)  # reveal swww so its transition shows
         instant = transition.type in ("none", "simple")
         duration = 0.0 if instant else transition.duration
+        prewarm = self._prewarm_for(transition, duration)
+        if transition.hold > 0:
+            # The caller is covering the screen: mpv can cold-start behind the
+            # cover right away, whatever the easing, and starts moving as the
+            # cover lifts.
+            duration = prewarm = transition.hold
         sock = self._ipc_socket_path()
         cfg = json.dumps(
             {
@@ -244,7 +250,7 @@ class WlrootsBackend(WallpaperBackend):
                 "fallback": self._mpvpaper_cmd(mpvpaper, path),
                 "sock": sock,
                 "duration": duration,
-                "prewarm": self._prewarm_for(transition, duration),
+                "prewarm": prewarm,
             }
         )
         # The driver runs in its own process: it launches mpvpaper paused on the

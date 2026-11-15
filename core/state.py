@@ -41,6 +41,11 @@ def cache_dir() -> Path:
     return Path(base) / _APP
 
 
+def data_dir() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / _APP
+
+
 def _default_wallpaper_dir() -> Path | None:
     """Best-effort guess: the XDG Pictures dir, or a Wallpapers folder in it."""
     pictures = os.environ.get("XDG_PICTURES_DIR")
@@ -63,9 +68,10 @@ class Config:
     # wallpaper path. Empty = auto: notify noctalia-shell if it's running
     # (it derives its color scheme from the wallpaper but doesn't watch swww).
     color_hook: str = ""
-    # Switch animation: a preset name from core/backends/transitions.py, a raw
-    # swww transition type, or "random" (a different preset every apply).
-    # Unknown names fall back to "random" at apply time.
+    # Switch animation: a preset name from core/backends/transitions.py, a
+    # shader from ui/qml/shaders/, a raw swww transition type, or "random" (a
+    # different one every apply). `m` flips it between "random" and
+    # "silhouette". Unknown names fall back to "random" at apply time.
     transition: str = "random"
     transition_duration: float = 1.0
     # Card layout, cycled with `t`: "push" (the focused card shoves its

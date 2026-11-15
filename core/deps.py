@@ -121,6 +121,12 @@ def check() -> list[DepResult]:
             required=False,
             hint="install 'ffmpeg' for video thumbnails and previews",
         ),
+        DepResult(
+            "onnxruntime",
+            importlib.util.find_spec("onnxruntime") is not None,
+            required=False,
+            hint="install 'onnxruntime' for Python (Arch: python-onnxruntime-cpu) for the silhouette transition",
+        ),
     ]
 
 

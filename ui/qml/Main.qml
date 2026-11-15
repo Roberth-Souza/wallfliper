@@ -58,7 +58,7 @@ Window {
             else if (win.colorMode)
                 win.exitColorClear()
             else
-                Qt.quit()
+                win.requestQuit()
         }
     }
 
@@ -95,6 +95,7 @@ Window {
     readonly property int currentIndex:
         honeycomb && hive ? hive.currentIndex : carousel.currentIndex
     onHoneycombChanged: if (!honeycomb && hive) carousel.snapIndex(hive.currentIndex)
+    onCurrentIndexChanged: controller.noteFocus(currentIndex)
 
     function focusIndex(i: int): void {
         if (honeycomb && win.hive)
@@ -149,35 +150,47 @@ Window {
         TransitionSurface {}
     }
 
-    function startShaderTransition(oldUrl, newUrl, shaderUrl, ms) {
+    function startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms) {
         win.dropTransitionSurface()
         const surface = transitionComponent.createObject(null, {
             oldSource: oldUrl,
             newSource: newUrl,
             shaderUrl: shaderUrl,
+            maskSource: maskUrl,
             durationMs: ms
         })
         if (surface === null) {          // shader or component broken
-            controller.shaderTransitionFailed()
-            win.finishTransition()
+            win.finishTransition(false)
             return
         }
         surface.covered.connect(controller.shaderSurfaceReady)
-        surface.finished.connect(function() {
-            controller.shaderTransitionDone()
-            win.finishTransition()
-        })
-        surface.failed.connect(function() {
-            controller.shaderTransitionFailed()
-            win.finishTransition()
-        })
+        surface.finished.connect(function() { win.finishTransition(true) })
+        surface.failed.connect(function() { win.finishTransition(false) })
         win.transitionSurface = surface
     }
 
-    function finishTransition() {
+    // Reporting back may start the next switch at once (an apply made while
+    // this one was playing), so the surface is dropped first and the quit only
+    // happens when nothing new took its place.
+    function finishTransition(ok) {
         win.dropTransitionSurface()
-        if (win.quitAfterTransition)
+        if (ok)
+            controller.shaderTransitionDone()
+        else
+            controller.shaderTransitionFailed()
+        if (win.quitAfterTransition && win.transitionSurface === null)
             Qt.quit()
+    }
+
+    // Closing never cuts a switch that is still being painted: the overlay
+    // goes away now, the process when the animation lands.
+    function requestQuit() {
+        if (win.transitionSurface === null) {
+            Qt.quit()
+            return
+        }
+        win.quitAfterTransition = true
+        win.visible = false
     }
 
     function dropTransitionSurface() {
@@ -277,9 +290,10 @@ Window {
         function onFolderPickerClosed() { win.closeFolderPicker() }
         // Portal missing or the request failed: fall back to manual entry.
         function onFolderManualRequested() { win.showFolderEntry() }
-        function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, ms) {
-            win.startShaderTransition(oldUrl, newUrl, shaderUrl, ms)
+        function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, maskUrl, ms) {
+            win.startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms)
         }
+        function onTransitionModeChanged() { modeTagTimer.restart() }
     }
 
     FocusScope {
@@ -297,7 +311,7 @@ Window {
                 else if (win.colorMode)
                     win.exitColorClear()
                 else
-                    Qt.quit()
+                    win.requestQuit()
                 event.accepted = true
                 return
             }
@@ -378,6 +392,14 @@ Window {
                     ? win.hive.selectRandom() : carousel.selectRandom()
             else if (event.text === "t")
                 controller.setCardLayout(carousel.nextLayout[controller.cardLayout] ?? "push")
+            else if (event.text === "m") {
+                // The first press only shows the mode (there is no other way
+                // to see it); pressing again while it is shown switches.
+                if (modeTagTimer.running)
+                    controller.cycleTransitionMode()
+                else
+                    modeTagTimer.restart()
+            }
             else if (event.key === Qt.Key_D && (event.modifiers & Qt.ShiftModifier)) {
                 // Shift+D: move the selected wallpaper file to the trash (no
                 // confirmation). Must precede the nav branch below, which
@@ -450,6 +472,25 @@ Window {
                     font.family: Theme.fontFamily
                     font.pixelSize: 15
                 }
+            }
+
+            // Switch-animation mode, shown in the bar's corner only for a
+            // moment after `m` changes it. Outside the row so the title does
+            // not shift when it comes and goes.
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                visible: modeTagTimer.running
+                text: controller.transitionMode
+                color: Theme.muted
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+            }
+
+            Timer {
+                id: modeTagTimer
+                interval: 2000
             }
         }
 

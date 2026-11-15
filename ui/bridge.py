@@ -11,10 +11,11 @@ import random
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import (
     Property,
+    QCoreApplication,
     QFile,
     QModelIndex,
     QObject,
@@ -43,6 +44,8 @@ from core.integrations import notify_color_tools
 from core.library import WallpaperEntry, scan
 from core.portal import FolderChooser, portal_available
 from core.previews import PreviewLoader
+from core.silhouette import SilhouetteLoader, cached_field, prune_fields
+from core.silhouette import available as silhouette_available
 from core.state import (
     Config,
     WallpaperKind,
@@ -64,6 +67,15 @@ from .model import KIND_ROLE, NAME_ROLE, PATH_ROLE, RingModel, WallpaperModel
 _THUMB_SIZE = QSize(1920, 1920)
 
 _CARD_LAYOUTS = ("push", "overlay", "flow", "honeycomb")
+
+# What `m` flips config.transition between.
+_TRANSITION_MODES = ("random", "silhouette")
+# The shader `silhouette` degrades to when the new wallpaper has no subject (or
+# none has been extracted yet).
+_SILHOUETTE_FALLBACK = "colonies"
+# Focus has to rest this long before silhouettes are queued around it, so
+# scrubbing through cards does not reorder the work on every step.
+_SILHOUETTE_SETTLE_MS = 250
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -174,6 +186,15 @@ class _CachePruner(QRunnable):
             self._thumbs.prune(self._paths(self._thumbs.supports))
             self._previews.prune(self._paths(self._previews.supports))
             prune_first_frames(self._paths(lambda kind: kind == "video"))
+            # A video's silhouette is its first frame's.
+            frames = (
+                first_frame(video, cached_only=True)
+                for video in self._paths(lambda kind: kind == "video")
+            )
+            prune_fields(
+                self._paths(lambda kind: kind == "image")
+                + [frame for frame in frames if frame is not None]
+            )
 
     def _paths(self, accepts: Callable[[WallpaperKind], bool]) -> list[Path]:
         return [entry.path for entry in self._library if accepts(entry.kind)]
@@ -187,10 +208,12 @@ class Controller(QObject):
     kindFilterChanged = Signal()
     colorFilterChanged = Signal()
     cardLayoutChanged = Signal()
+    transitionModeChanged = Signal()
     # Ask Main.qml to paint the switch itself on a layer-shell surface, because
     # the configured animation is a shader swww cannot do (see ui/shaders.py).
-    # Args: old wallpaper URL, new wallpaper URL, baked shader URL, duration ms.
-    shaderTransitionRequested = Signal(str, str, str, int)
+    # Args: old wallpaper URL, new wallpaper URL, baked shader URL, field
+    # texture URL ("" when the shader takes none), duration ms.
+    shaderTransitionRequested = Signal(str, str, str, str, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -239,6 +262,20 @@ class Controller(QObject):
         # Wallpaper waiting on a shader-painted switch: set when the surface is
         # asked for, applied once it covers the screen, cleared when it is done.
         self._pending_shader: WallpaperEntry | None = None
+        # Applied while a shader switch was playing; runs when that one lands.
+        self._queued_apply: WallpaperEntry | None = None
+        self._pending_hold = 0.0
+        # Silhouette extraction for the `silhouette` transition: only while that
+        # mode is on, nearest to the focused card first.
+        self._silhouettes = SilhouetteLoader(self)
+        self._focus_row = -1
+        self._silhouette_settle = QTimer(self)
+        self._silhouette_settle.setSingleShot(True)
+        self._silhouette_settle.setInterval(_SILHOUETTE_SETTLE_MS)
+        self._silhouette_settle.timeout.connect(self._queue_silhouettes)
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._silhouettes.stop)
         self.reload()
 
     # --- properties exposed to QML --------------------------------------
@@ -275,6 +312,21 @@ class Controller(QObject):
         """Card layout: "push", "overlay", "flow" or "honeycomb" (unknown reads as push)."""
         layout = self._config.card_layout
         return layout if layout in _CARD_LAYOUTS else "push"
+
+    @Property(str, notify=transitionModeChanged)
+    def transitionMode(self) -> str:
+        """What the configured switch animation will actually do, for the bar.
+
+        Normally config.transition itself; "silhouette" reads as its fallback
+        when outlines cannot be extracted on this machine, so the label never
+        promises an animation that is not going to play.
+        """
+        name = self._config.transition
+        if not (transitions.is_known(name) or shaders.is_shader(name)):
+            return "random"
+        if name == "silhouette" and not silhouette_available():
+            return _SILHOUETTE_FALLBACK if shaders.is_shader(_SILHOUETTE_FALLBACK) else "random"
+        return name
 
     @Property("QVariantList", constant=True)
     def colorPalette(self) -> list[dict]:
@@ -375,6 +427,7 @@ class Controller(QObject):
         self._warming.discard(key)
         if ok:
             self._warmed.add(key)
+            self._queue_silhouettes()  # the frame is what gets segmented
 
     @Slot(int, result=bool)
     def apply(self, proxy_row: int) -> bool:
@@ -388,15 +441,25 @@ class Controller(QObject):
         entry = self._model.entry_at(source)
         if entry is None:
             return False
+        if self._pending_shader is not None:
+            # A switch in flight is never cut short: the same wallpaper again
+            # is a no-op, another one waits for it (the latest wins).
+            same = entry.path == self._pending_shader.path
+            self._queued_apply = None if same else entry
+            return True
+        return self._start_apply(entry)
+
+    def _start_apply(self, entry: WallpaperEntry) -> bool:
         # One draw per apply: the shader path and the swww fallback must be
         # talking about the same animation.
-        name = self._pick_transition()
+        name = self._pick_transition(entry)
         plan = self._shader_plan(entry, name)
         if plan is not None:
             # The surface paints the old wallpaper first and calls back (see
             # shaderSurfaceReady); the real switch happens behind it, so the
             # apply itself is deferred, not skipped.
             self._pending_shader = entry
+            self._pending_hold = plan[-1] / 1000
             self.shaderTransitionRequested.emit(*plan)
             return True
         self._apply_entry(entry, self._swww_transition(name))
@@ -417,17 +480,28 @@ class Controller(QObject):
         except BackendError as exc:
             self._set_status(f"⚠ failed to apply: {exc}")
 
-    def _shader_plan(self, entry: WallpaperEntry, name: str) -> tuple[str, str, str, int] | None:
+    def _shader_plan(
+        self, entry: WallpaperEntry, name: str
+    ) -> tuple[str, str, str, str, int] | None:
         """Arguments for a shader-painted switch, or None to use swww.
 
-        Requires everything the surface needs: a baked shader, a still image
-        on both ends (the shader blends two textures, and what is on screen for
-        a video is not a file it can sample), and a previous wallpaper that
-        still exists to blend *from*. Anything missing falls back to swww.
+        Requires everything the surface needs: a baked shader, a still on both
+        ends (the shader blends two textures), a previous wallpaper that still
+        exists to blend *from*, and for `silhouette` the new wallpaper's field
+        texture. A video can be the new end, as its first frame (see
+        `_still_of`), but not the old one: what is on screen for a playing
+        video is not a file. Anything missing falls back to swww.
         """
         shader_url = shaders.url_for(name)
-        if shader_url is None or entry.kind != "image":
+        still = self._still_of(entry)
+        if shader_url is None or still is None:
             return None
+        field_url = ""
+        if name == "silhouette":
+            field = cached_field(still)
+            if field is None:
+                return None
+            field_url = QUrl.fromLocalFile(str(field)).toString()
         previous = load_state()
         if not previous.path or previous.kind != "image":
             return None
@@ -436,9 +510,13 @@ class Controller(QObject):
             return None
         return (
             QUrl.fromLocalFile(str(old)).toString(),
-            QUrl.fromLocalFile(str(entry.path)).toString(),
+            QUrl.fromLocalFile(str(still)).toString(),
             shader_url,
-            max(1, int(self._config.transition_duration * 1000)),
+            field_url,
+            max(
+                1,
+                int(self._config.transition_duration * shaders.duration_scale(name) * 1000),
+            ),
         )
 
     @Slot()
@@ -452,11 +530,19 @@ class Controller(QObject):
         entry = self._pending_shader
         if entry is None:
             return
-        self._apply_entry(entry, ImageTransition(type="none"))
+        # A video comes up behind the surface paused on the very frame the
+        # shader is drawing, and starts playing as the surface goes away.
+        self._apply_entry(entry, ImageTransition(type="none", hold=self._pending_hold))
 
     @Slot()
     def shaderTransitionDone(self) -> None:
         self._pending_shader = None
+        self._run_queued_apply()
+
+    def _run_queued_apply(self) -> None:
+        entry, self._queued_apply = self._queued_apply, None
+        if entry is not None:
+            self._start_apply(entry)
 
     @Slot()
     def shaderTransitionFailed(self) -> None:
@@ -464,7 +550,8 @@ class Controller(QObject):
         entry = self._pending_shader
         self._pending_shader = None
         if entry is not None:
-            self._apply_entry(entry, self._swww_transition())
+            self._apply_entry(entry, self._swww_transition("random"))
+        self._run_queued_apply()
 
     @Slot(int)
     def deleteWallpaper(self, proxy_row: int) -> None:
@@ -546,6 +633,63 @@ class Controller(QObject):
         save_config(self._config)
         self.cardLayoutChanged.emit()
 
+    @Slot()
+    def cycleTransitionMode(self) -> None:
+        """`m`: flip the switch animation between the two modes.
+
+        A hand-configured animation that is neither of them moves to the first
+        mode rather than being cycled back to — pressing `m` picks a mode.
+        """
+        current = self._config.transition
+        index = _TRANSITION_MODES.index(current) if current in _TRANSITION_MODES else -1
+        self._config.transition = _TRANSITION_MODES[(index + 1) % len(_TRANSITION_MODES)]
+        save_config(self._config)
+        self.transitionModeChanged.emit()
+        self._queue_silhouettes()
+
+    @Slot(int)
+    def noteFocus(self, proxy_row: int) -> None:
+        """QML reports the focused card, so silhouettes are extracted near it."""
+        self._focus_row = proxy_row
+        if self._config.transition == "silhouette":
+            self._silhouette_settle.start()
+
+    def _queue_silhouettes(self) -> None:
+        """(Re)order silhouette extraction around the focused card.
+
+        The whole filtered library is queued, nearest card first: a wallpaper
+        is usually applied within a second or two of being focused, sooner than
+        its own silhouette could be ready, so the ones around the focus are
+        extracted ahead of the user reaching them. Leaving the mode empties the
+        queue, which lets the worker exit.
+        """
+        if self._config.transition != "silhouette" or not shaders.is_shader("silhouette"):
+            self._silhouettes.want([])
+            return
+        count = self._proxy.rowCount()
+        if count == 0:
+            self._silhouettes.want([])
+            return
+        focus = min(max(self._focus_row, 0), count - 1)
+        wanted: list[Path] = []
+        # The strip is a loop, so distance wraps: focus, +1, -1, +2, -2, …
+        for step in range(count):
+            offset = (step + 1) // 2 * (1 if step % 2 else -1)
+            row = (focus + offset) % count
+            entry = self._model.entry_at(self._proxy.mapToSource(self._proxy.index(row, 0)))
+            still = self._still_of(entry) if entry is not None else None
+            if still is not None:
+                wanted.append(still)
+        self._silhouettes.want(wanted)
+
+    @staticmethod
+    def _still_of(entry: WallpaperEntry) -> Path | None:
+        """The picture a shader switch *to* `entry` draws: the image itself, or
+        a video's first frame once it is cached (warmed on selection)."""
+        if entry.kind == "image":
+            return entry.path
+        return first_frame(entry.path, cached_only=True)
+
     @Slot(str)
     def setFolder(self, folder: str) -> None:
         path = _to_local_path(folder)
@@ -566,6 +710,7 @@ class Controller(QObject):
         )
         self._warmed.clear()
         self._warming.clear()
+        self._queue_silhouettes()
         # New library, new sweep — but only re-kick it right away if a color
         # filter is live (otherwise unclassified entries would stay hidden).
         self._color_swept = False
@@ -578,21 +723,31 @@ class Controller(QObject):
         self._status = text
         self.statusChanged.emit()
 
-    def _pick_transition(self) -> str:
+    def _pick_transition(self, entry: WallpaperEntry) -> str:
         """Resolve the configured animation to one concrete name, per apply.
 
         "random" draws from the swww presets *and* the shader transitions, so
         both kinds share a single pool. A typo in config.json degrades to that
         pool instead of handing swww a flag value it rejects, which would fail
         the whole apply.
+
+        `silhouette` needs the new wallpaper's subject: without a cached field
+        (no subject, not extracted yet, or no onnxruntime) it is left out of the
+        random pool, and when configured it becomes its fallback shader.
         """
         name = self._config.transition
         if not (transitions.is_known(name) or shaders.is_shader(name)):
             name = "random"
-        if name != "random":
-            return name
-        pool = transitions.RANDOM_POOL + shaders.names()
-        return random.choice(pool) if pool else "random"
+        still = self._still_of(entry)
+        has_field = still is not None and cached_field(still) is not None
+        if name == "random":
+            pool = transitions.RANDOM_POOL + tuple(
+                shader for shader in shaders.names() if shader != "silhouette" or has_field
+            )
+            return random.choice(pool) if pool else "random"
+        if name == "silhouette" and not has_field:
+            return _SILHOUETTE_FALLBACK if shaders.is_shader(_SILHOUETTE_FALLBACK) else "random"
+        return name
 
     def _swww_transition(self, name: str) -> ImageTransition:
         """The transition to hand swww, with fps matched to the display.

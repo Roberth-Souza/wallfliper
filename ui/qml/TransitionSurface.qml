@@ -25,6 +25,9 @@ Window {
     property url oldSource
     property url newSource
     property url shaderUrl
+    // Field texture of the new wallpaper's subject (core/silhouette.py), for
+    // the shaders that draw from it. Empty for the ones that don't.
+    property url maskSource
     property int durationMs: 1000
     // Hex cells across the screen's height. More cells = finer honeycomb.
     property real cells: 9
@@ -52,7 +55,9 @@ Window {
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
     LayerShell.Window.exclusionZone: -1
 
+    readonly property bool hasMask: maskSource.toString() !== ""
     readonly property bool ready: oldImage.status === Image.Ready && newImage.status === Image.Ready
+        && (!hasMask || maskImage.status === Image.Ready)
     property bool started: false
 
     onReadyChanged: if (ready && !started) settle.start()
@@ -112,6 +117,23 @@ Window {
         }
     }
 
+    // Cropped exactly like the wallpaper it was extracted from, so the field
+    // lines up with the picture on any screen shape. smooth, because the
+    // shader reconstructs a one-pixel line from this much smaller texture.
+    Image {
+        id: maskImage
+        anchors.fill: parent
+        source: surface.maskSource
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: false
+        smooth: true
+        onStatusChanged: {
+            if (status === Image.Ready) maskTexture.scheduleUpdate()
+            else if (status === Image.Error) surface.failed()
+        }
+    }
+
     // live: false renders each texture once instead of every frame — the
     // wallpapers are still images, re-rendering them 60 times a second would be
     // two extra full-screen passes per frame for nothing.
@@ -129,6 +151,13 @@ Window {
         live: false
     }
 
+    ShaderEffectSource {
+        id: maskTexture
+        sourceItem: maskImage
+        hideSource: true
+        live: false
+    }
+
     ShaderEffect {
         id: effect
         anchors.fill: parent
@@ -139,6 +168,12 @@ Window {
         property real progress: 0.0
         property real aspect: width / Math.max(height, 1)
         property real cells: surface.cells
+        property variant srcMask: maskTexture
+        // Screen pixels per field texel, under the same crop as maskImage.
+        property real maskScale: maskImage.implicitWidth > 0
+            ? Math.max(width / maskImage.implicitWidth, height / maskImage.implicitHeight) : 1
+        property real pixelHeight: height
+        property real seed: Math.random()
     }
 
     NumberAnimation {

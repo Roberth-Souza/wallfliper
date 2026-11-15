@@ -28,6 +28,11 @@ class ImageTransition:
     wave). None means "leave swww's default", which is what a raw type gets;
     presets fill them in. Resolve a transition through `transitions.resolve`
     before reading these — a preset name carries its parameters implicitly.
+
+    `hold` is for a caller that paints the switch itself, on a surface above
+    the wallpaper: the seconds that surface will keep covering the screen. A
+    video then stays paused on its first frame until the cover lifts; images
+    ignore it.
     """
 
     type: str = "random"
@@ -37,6 +42,7 @@ class ImageTransition:
     pos: str | None = None
     bezier: str | None = None
     wave: str | None = None
+    hold: float = 0.0
 
 
 class BackendError(RuntimeError):
