@@ -16,6 +16,7 @@ layout(std140, binding = 0) uniform buf {
     float aspect;       // width / height
     float pixelHeight;  // surface height in pixels, to size the blocks
     float seed;         // per-switch random, so colonies never start in the same spots
+    float liveNew;      // 1 = the new wallpaper is live under the surface: draw nothing for it
 };
 
 layout(binding = 1) uniform sampler2D srcOld;
@@ -75,5 +76,8 @@ void main() {
     float longest = MAX_DELAY + REACH * SPREAD + 0.5 * (GRAIN + LUMPS);
     float reveal = step(arrival, progress * longest) * step(1e-4, progress);
 
-    fragColor = mix(texture(srcOld, uv), texture(srcNew, uv), reveal) * qt_Opacity;
+    // Premultiplied: scaling the new texel to nothing leaves a hole the live
+    // wallpaper underneath shows through.
+    vec4 fresh = texture(srcNew, uv) * (1.0 - liveNew);
+    fragColor = mix(texture(srcOld, uv), fresh, reveal) * qt_Opacity;
 }

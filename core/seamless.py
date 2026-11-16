@@ -21,6 +21,15 @@ Unpausing is not fire-and-forget (see `_hold_playing`): `mpvpaper -p` races us
 and can pause the video right back, permanently, so the driver stays around
 long enough to see real playback before it exits.
 
+Live mode (`ready_fd` in the config) is for a caller that covers the screen
+with a surface of its own and can turn that surface see-through: nothing has to
+wait for an animation to end, so the video is unpaused the moment its first
+frame is up, under the cover, and a byte on `ready_fd` tells the caller it can
+let the video show.
+
+The IPC socket is left in place for the video's whole life, so a later switch
+can ask the same mpv for the frame it is showing (the backend's `freeze_video`).
+
 Stdlib only and self-contained (no core imports): it is executed as a plain
 script via `python core/seamless.py <json-config>`, with no package context.
 """
@@ -45,9 +54,17 @@ _CONFIRM_WINDOW_S = 3.0
 # deadman switch can no longer fire, so there is nothing left to watch for.
 _CONFIRM_STABLE_S = 1.0
 _POLL_INTERVAL_S = 0.15
+# Live mode: how long to wait for mpv to have a frame on its surface before
+# announcing it anyway. Announcing early is harmless — swww is showing the same
+# first frame right under mpvpaper — so this only bounds the wait.
+_FRAME_DEADLINE_S = 2.0
+_FRAME_POLL_S = 0.02
+# mpv reports its output configured when the first frame is handed over;
+# mpvpaper still has to draw and commit it.
+_FRAME_SETTLE_S = 0.08
 
 
-class _Ipc:
+class Ipc:
     """Minimal mpv JSON-IPC client over an open socket.
 
     One command at a time, replies matched by `request_id`: mpv interleaves
@@ -61,7 +78,9 @@ class _Ipc:
         self._buf = b""
         self._next_id = 1
 
-    def command(self, *args: object) -> tuple[bool, object]:
+    def command(
+        self, *args: object, timeout: float = _REPLY_TIMEOUT_S
+    ) -> tuple[bool, object]:
         """Run one mpv command; returns (succeeded, data)."""
         request_id = self._next_id
         self._next_id += 1
@@ -70,8 +89,9 @@ class _Ipc:
             self._conn.sendall(payload.encode() + b"\n")
         except OSError:
             return False, None
-        deadline = time.monotonic() + _REPLY_TIMEOUT_S
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            self._conn.settimeout(remaining)
             line = self._readline()
             if line is None:
                 return False, None
@@ -118,13 +138,15 @@ def _connect(sock: str, not_before: float) -> socket.socket | None:
             conn.close()
             time.sleep(0.03)
             continue
-        conn.settimeout(_REPLY_TIMEOUT_S)
         return conn
     return None
 
 
-def _start_playback(sock: str, not_before: float) -> bool:
+def _start_playback(sock: str, not_before: float, ready_fd: int | None) -> bool:
     """Unpause the waiting mpvpaper and make sure it stays playing.
+
+    With `ready_fd` (live mode) the unpause waits for mpv's first frame rather
+    than for a moment in time, and is announced on that descriptor.
 
     False means the handoff is beyond saving (mpv unreachable, gone, or frozen
     despite the retries) and the caller should fall back to a hard cut.
@@ -133,14 +155,43 @@ def _start_playback(sock: str, not_before: float) -> bool:
     if conn is None:
         return False
     with conn:
-        ipc = _Ipc(conn)
+        ipc = Ipc(conn)
+        if ready_fd is not None:
+            _await_first_frame(ipc)
+            _announce(ready_fd)
         started, _ = ipc.command("set_property", "pause", False)
         if not started:
             return False
         return _hold_playing(ipc)
 
 
-def _hold_playing(ipc: _Ipc) -> bool:
+def _await_first_frame(ipc: Ipc) -> None:
+    """Block until mpv has its opening frame on screen, or the wait runs out."""
+    deadline = time.monotonic() + _FRAME_DEADLINE_S
+    while time.monotonic() < deadline:
+        ok, configured = ipc.command("get_property", "vo-configured")
+        if ok and configured is True:
+            time.sleep(_FRAME_SETTLE_S)
+            return
+        time.sleep(_FRAME_POLL_S)
+
+
+def _announce(ready_fd: int) -> None:
+    """Tell the caller the video is up. It may be gone already; that is fine."""
+    try:
+        os.write(ready_fd, b"1")
+    except OSError:
+        pass
+
+
+def _close(fd: int) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _hold_playing(ipc: Ipc) -> bool:
     """Watch the freshly unpaused video until mpvpaper can no longer steal it.
 
     `mpvpaper -p` runs a two-second deadman switch: if its surface got no frame
@@ -192,6 +243,7 @@ def _hold_playing(ipc: _Ipc) -> bool:
 def main(argv: list[str]) -> int:
     cfg = json.loads(argv[0])
     start = time.monotonic()
+    ready_fd: int | None = cfg.get("ready_fd")
     # Cold-start mpv during the transition, not after it: launch `prewarm`
     # seconds before the animation ends so its surface is mapped (frozen on
     # frame 0) by the time we unpause.
@@ -203,23 +255,28 @@ def main(argv: list[str]) -> int:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
+    # Live: nothing to wait for but mpv itself. Otherwise motion must not begin
+    # before the animation has visually finished.
+    not_before = start if ready_fd is not None else start + cfg["duration"]
     try:
-        if _start_playback(cfg["sock"], start + cfg["duration"]):
+        if _start_playback(cfg["sock"], not_before, ready_fd):
             return 0
-        # The paused mpvpaper would sit frozen on frame 0 forever. Kill it and
-        # relaunch a plain pause=no instance so a failed handoff degrades to a
-        # hard cut.
-        _recover_hard_cut(paused, cfg["fallback"])
-        return 0
     finally:
-        # Drop the socket pathname on every exit (success or fallback), not just
-        # success — mpv keeps its listening fd, so this only removes the dangling
-        # name and stops per-launch sockets from piling up. A cancelled driver is
-        # SIGKILLed before this runs; the backend unlinks that one instead.
-        try:
-            os.unlink(cfg["sock"])
-        except OSError:
-            pass
+        if ready_fd is not None:
+            # Unannounced on every failure path: end-of-file is how the caller
+            # learns the video is not coming up under its cover.
+            _close(ready_fd)
+    # The paused mpvpaper would sit frozen on frame 0 forever. Kill it and
+    # relaunch a plain pause=no instance so a failed handoff degrades to a
+    # hard cut. Its socket dies with it (the relaunch has one of its own); a
+    # cancelled driver is SIGKILLed before this runs and the backend unlinks
+    # that one instead.
+    _recover_hard_cut(paused, cfg["fallback"])
+    try:
+        os.unlink(cfg["sock"])
+    except OSError:
+        pass
+    return 0
 
 
 def _recover_hard_cut(paused: subprocess.Popen, fallback_cmd: list[str]) -> None:

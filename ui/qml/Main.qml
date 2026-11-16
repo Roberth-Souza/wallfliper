@@ -179,19 +179,25 @@ Window {
             controller.shaderTransitionDone()
         else
             controller.shaderTransitionFailed()
-        if (win.quitAfterTransition && win.transitionSurface === null)
+        if (win.quitAfterTransition && !win.switchInFlight())
             Qt.quit()
     }
 
     // Closing never cuts a switch that is still being painted: the overlay
     // goes away now, the process when the animation lands.
     function requestQuit() {
-        if (win.transitionSurface === null) {
+        if (!win.switchInFlight()) {
             Qt.quit()
             return
         }
         win.quitAfterTransition = true
         win.visible = false
+    }
+
+    // A switch can be in flight before it has a surface: the frame of an
+    // outgoing video is taken off-thread first.
+    function switchInFlight() {
+        return win.transitionSurface !== null || controller.switchPending()
     }
 
     function dropTransitionSurface() {
@@ -293,6 +299,10 @@ Window {
         function onFolderManualRequested() { win.showFolderEntry() }
         function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs) {
             win.startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs)
+        }
+        function onShaderVideoLive() {
+            if (win.transitionSurface !== null)
+                win.transitionSurface.goLive()
         }
         function onTransitionModeChanged() { modeTagTimer.restart() }
     }

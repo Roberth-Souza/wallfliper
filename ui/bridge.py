@@ -22,6 +22,7 @@ from PySide6.QtCore import (
     QPersistentModelIndex,
     QRunnable,
     QSize,
+    QSocketNotifier,
     QSortFilterProxyModel,
     QThreadPool,
     QTimer,
@@ -37,7 +38,7 @@ from core.backends import (
     get_backend,
     transitions,
 )
-from core.backends.base import ImageTransition
+from core.backends.base import ImageTransition, WallpaperBackend
 from core.colors import PALETTE, PALETTE_NAMES, ColorLoader, ColorLookup
 from core.firstframe import first_frame, prune_first_frames
 from core.integrations import notify_color_tools
@@ -48,7 +49,9 @@ from core.silhouette import SilhouetteLoader, cached_field, prune_fields
 from core.silhouette import available as silhouette_available
 from core.state import (
     Config,
+    State,
     WallpaperKind,
+    cache_dir,
     load_config,
     load_state,
     save_config,
@@ -82,6 +85,14 @@ _SILHOUETTE_SETTLE_MS = 250
 # for a video — swww is already showing the same first frame underneath.
 _LATE_APPLY_IMAGE_MS = 300
 _LATE_APPLY_VIDEO_MS = 700
+# The frame an outgoing video wallpaper is frozen on, so a shader switch away
+# from it has an old picture to draw. No suffix: the backend picks the format.
+# Only the switch in flight uses it, and it is deleted when that one lands.
+_FROZEN_FRAME = "frozen-frame"
+
+# shaderTransitionRequested's arguments: old URL, new URL, shader URL, field
+# URL, duration ms, linger ms.
+_ShaderPlan = tuple[str, str, str, str, int, int]
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -176,6 +187,33 @@ class _FirstFrameWarmer(QRunnable):
         self._signals.finished.emit(str(self._path), ok)
 
 
+class _FreezeSignals(QObject):
+    finished = Signal(str)  # the outgoing video's saved frame, "" if there is none
+
+
+class _VideoFreezer(QRunnable):
+    """Freeze the outgoing video wallpaper and save its frame, off the UI thread.
+
+    Getting that frame takes anything from a tenth of a second to most of
+    one, depending on the video.
+    """
+
+    def __init__(self, backend: WallpaperBackend, dest: Path, signals: _FreezeSignals) -> None:
+        super().__init__()
+        self._backend = backend
+        self._dest = dest
+        self._signals = signals
+
+    def run(self) -> None:  # executed on a pool thread
+        frame: Path | None = None
+        try:
+            frame = self._backend.freeze_video(self._dest)
+        finally:
+            # Always reported: the switch is waiting on this and runs
+            # see-through without a frame.
+            self._signals.finished.emit(str(frame) if frame is not None else "")
+
+
 class _CachePruner(QRunnable):
     """Collect orphaned cache files off the UI thread (core/cachegc.py)."""
 
@@ -220,6 +258,9 @@ class Controller(QObject):
     # Args: old wallpaper URL, new wallpaper URL, baked shader URL, field
     # texture URL ("" when the shader takes none), duration ms.
     shaderTransitionRequested = Signal(str, str, str, str, int, int)
+    # The video applied under the transition surface is playing: the surface
+    # may stop painting its still and let it show through.
+    shaderVideoLive = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -271,6 +312,18 @@ class Controller(QObject):
         # Applied while a shader switch was playing; runs when that one lands.
         self._queued_apply: WallpaperEntry | None = None
         self._pending_hold = 0.0
+        # A shader switch away from a video waits here while that video's
+        # frame is taken; the plan is launched when the freezer reports back.
+        self._awaiting_freeze: _ShaderPlan | None = None
+        self._frozen_frame: Path | None = None
+        self._freeze_pool = QThreadPool(self)
+        self._freeze_pool.setMaxThreadCount(1)
+        self._freeze_signals = _FreezeSignals(self)
+        self._freeze_signals.finished.connect(self._on_freeze_finished)
+        # Read end of the pipe the backend reports a live video on, and its
+        # notifier; both exist only while a switch to a video is in flight.
+        self._live_fd = -1
+        self._live_notifier: QSocketNotifier | None = None
         # Silhouette extraction for the `silhouette` transition: only while that
         # mode is on, nearest to the focused card first.
         self._silhouettes = SilhouetteLoader(self)
@@ -455,22 +508,61 @@ class Controller(QObject):
             return True
         return self._start_apply(entry)
 
+    @Slot(result=bool)
+    def switchPending(self) -> bool:
+        """True while a shader switch is in flight, surface or not."""
+        return self._pending_shader is not None
+
     def _start_apply(self, entry: WallpaperEntry) -> bool:
         # One draw per apply: the shader path and the swww fallback must be
         # talking about the same animation.
         name = self._pick_transition(entry)
-        plan = self._shader_plan(entry, name)
+        previous = load_state()
+        plan = self._shader_plan(entry, name, previous)
         if plan is not None:
             # The surface paints the old wallpaper first and calls back (see
             # shaderSurfaceReady); the real switch happens behind it, so the
             # apply itself is deferred, not skipped.
             self._pending_shader = entry
-            # How long the surface still covers the screen after the apply.
-            self._pending_hold = (plan[5] if plan[0] == "" else plan[4]) / 1000
-            self.shaderTransitionRequested.emit(*plan)
+            # A playing video is not a file to draw from, but it can be frozen
+            # and its frame saved. Only for another video, which then plays as
+            # it is revealed: an image gains nothing from it, and see-through
+            # keeps the old video moving under it instead. Not when it is the
+            # wallpaper being applied either: that apply is a no-op, which
+            # would leave it frozen.
+            if (
+                plan[0] == ""
+                and entry.kind == "video"
+                and previous.kind == "video"
+                and previous.path != str(entry.path)
+            ):
+                self._awaiting_freeze = plan
+                self._freeze_pool.start(
+                    _VideoFreezer(
+                        self._backend, cache_dir() / _FROZEN_FRAME, self._freeze_signals
+                    )
+                )
+            else:
+                self._launch_shader(plan)
             return True
         self._apply_entry(entry, self._swww_transition(name))
         return False
+
+    def _on_freeze_finished(self, frame: str) -> None:
+        plan, self._awaiting_freeze = self._awaiting_freeze, None
+        if plan is None:
+            return
+        if frame:
+            self._frozen_frame = Path(frame)
+            plan = (QUrl.fromLocalFile(frame).toString(), *plan[1:])
+        # Without a frame the old URL stays empty and the surface runs
+        # see-through over the still-playing video.
+        self._launch_shader(plan)
+
+    def _launch_shader(self, plan: _ShaderPlan) -> None:
+        # How long the surface still covers the screen after the apply.
+        self._pending_hold = (plan[5] if plan[0] == "" else plan[4]) / 1000
+        self.shaderTransitionRequested.emit(*plan)
 
     def _apply_entry(self, entry: WallpaperEntry, transition: ImageTransition) -> None:
         """Hand a wallpaper to the backend and record it, reporting failures."""
@@ -488,16 +580,17 @@ class Controller(QObject):
             self._set_status(f"⚠ failed to apply: {exc}")
 
     def _shader_plan(
-        self, entry: WallpaperEntry, name: str
-    ) -> tuple[str, str, str, str, int, int] | None:
+        self, entry: WallpaperEntry, name: str, previous: State
+    ) -> _ShaderPlan | None:
         """Arguments for a shader-painted switch, or None to use swww.
 
         Requires a baked shader, a still of the new wallpaper (a video's is its
         first frame, see `_still_of`) and for `silhouette` that still's field
         texture; anything missing falls back to swww. The old end is optional:
-        without a still of it (a playing video is not a file) the old URL is
-        empty and the surface runs see-through, painting over the live
-        wallpaper and applying the new one at the end.
+        without a still of it the old URL is empty and the surface runs
+        see-through, painting over the live wallpaper and applying the new one
+        at the end. A previous *video* gets its still afterwards, by freezing
+        it, when the new wallpaper is a video too (see `_start_apply`).
         """
         shader_url = shaders.url_for(name)
         still = self._still_of(entry)
@@ -509,7 +602,6 @@ class Controller(QObject):
             if field is None:
                 return None
             field_url = QUrl.fromLocalFile(str(field)).toString()
-        previous = load_state()
         old_url = ""
         if previous.path and previous.kind == "image" and Path(previous.path).is_file():
             old_url = QUrl.fromLocalFile(previous.path).toString()
@@ -536,13 +628,68 @@ class Controller(QObject):
         entry = self._pending_shader
         if entry is None:
             return
-        # A video comes up behind the surface paused on the very frame the
-        # shader is drawing, and starts playing as the surface goes away.
-        self._apply_entry(entry, ImageTransition(type="none", hold=self._pending_hold))
+        if entry.kind != "video":
+            self._apply_entry(entry, ImageTransition(type="none"))
+            return
+        # A video comes up behind the surface on the very frame the shader is
+        # drawing and starts playing there at once; the backend reports it on
+        # the pipe, and the surface then lets it show through (shaderVideoLive).
+        # `hold` only matters to a backend that cannot report: the video then
+        # starts as the surface goes away.
+        ready_fd = self._watch_live_video()
+        try:
+            self._apply_entry(
+                entry,
+                ImageTransition(type="none", hold=self._pending_hold, ready_fd=ready_fd),
+            )
+        finally:
+            # The driver holds its own copy; with this one closed, end-of-file
+            # on the read end means nobody is going to report.
+            os.close(ready_fd)
+
+    def _watch_live_video(self) -> int:
+        """Open the pipe a live video is reported on; returns its write end."""
+        self._drop_live_watch()
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
+        self._live_fd = read_fd
+        self._live_notifier = QSocketNotifier(read_fd, QSocketNotifier.Type.Read, self)
+        self._live_notifier.activated.connect(self._on_live_readable)
+        return write_fd
+
+    def _on_live_readable(self) -> None:
+        try:
+            reported = os.read(self._live_fd, 1)
+        except BlockingIOError:
+            return  # spurious wake-up
+        except OSError:
+            reported = b""
+        self._drop_live_watch()
+        if reported and self._pending_shader is not None:
+            self.shaderVideoLive.emit()
+
+    def _drop_frozen_frame(self) -> None:
+        """Delete the outgoing video's still: uncompressed, and used once."""
+        frame, self._frozen_frame = self._frozen_frame, None
+        if frame is not None:
+            with suppress(OSError):
+                frame.unlink(missing_ok=True)
+
+    def _drop_live_watch(self) -> None:
+        if self._live_notifier is not None:
+            self._live_notifier.setEnabled(False)
+            self._live_notifier.deleteLater()
+            self._live_notifier = None
+        if self._live_fd >= 0:
+            with suppress(OSError):
+                os.close(self._live_fd)
+            self._live_fd = -1
 
     @Slot()
     def shaderTransitionDone(self) -> None:
         self._pending_shader = None
+        self._drop_live_watch()
+        self._drop_frozen_frame()
         self._run_queued_apply()
 
     def _run_queued_apply(self) -> None:
@@ -555,6 +702,8 @@ class Controller(QObject):
         """The surface could not draw (image decode failed): switch plainly."""
         entry = self._pending_shader
         self._pending_shader = None
+        self._drop_live_watch()
+        self._drop_frozen_frame()
         if entry is not None:
             self._apply_entry(entry, self._swww_transition("random"))
         self._run_queued_apply()

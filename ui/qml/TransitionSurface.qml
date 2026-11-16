@@ -26,6 +26,11 @@ import org.kde.layershell as LayerShell
 // picture over it. Nothing may change underneath while that shows through, so
 // `covered` then fires at the END of the animation, once the surface is opaque,
 // and the surface lingers for `lingerMs` while the real switch happens behind it.
+//
+// A video does not have to wait for any of this to end. Once the new wallpaper
+// is applied underneath and its video is actually playing there, `goLive()`
+// stops painting the new picture from its still and leaves those pixels to the
+// video, so what the shader reveals is already moving.
 Window {
     id: surface
 
@@ -69,8 +74,35 @@ Window {
         && newImage.status === Image.Ready
         && (!hasMask || maskImage.status === Image.Ready)
     property bool started: false
+    property bool live: false
 
     onReadyChanged: if (ready && !started) settle.start()
+
+    // The still and the video's opening frame are the same picture, scaled by
+    // two different renderers; the short fade keeps that from reading as a pop.
+    function goLive() {
+        if (surface.live)
+            return
+        surface.live = true
+        liveFade.start()
+    }
+
+    NumberAnimation {
+        id: liveFade
+        target: effect
+        property: "liveNew"
+        from: 0.0
+        to: 1.0
+        duration: 120
+        // Past the reveal the surface only lingers to hide the switch behind
+        // it; with the video showing through there is nothing left to hide.
+        onFinished: {
+            if (linger.running) {
+                linger.stop()
+                surface.finished()
+            }
+        }
+    }
 
     // Give the compositor a couple of frames to actually show our copy of the
     // old wallpaper before anything changes underneath it. Qt's frame-swap
@@ -191,6 +223,7 @@ Window {
             ? Math.max(width / maskImage.implicitWidth, height / maskImage.implicitHeight) : 1
         property real pixelHeight: height
         property real seed: Math.random()
+        property real liveNew: 0.0
     }
 
     NumberAnimation {

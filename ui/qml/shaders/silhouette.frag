@@ -21,6 +21,7 @@ layout(std140, binding = 0) uniform buf {
     float aspect;     // width / height
     float maskScale;  // screen pixels per field texel
     float seed;       // per-switch random, so the growth never repeats
+    float liveNew;    // 1 = the new wallpaper is live under the surface: draw nothing for it
 };
 
 layout(binding = 1) uniform sampler2D srcOld;
@@ -98,6 +99,9 @@ void main() {
     // The line has done its job once the scene starts growing from it.
     float ink = max(line * LINE_ALPHA, halo) * drawn * (1.0 - smoothstep(0.0, 0.5, grow));
 
-    vec4 color = mix(texture(srcOld, uv), texture(srcNew, uv), reveal);
+    // Premultiplied: scaling the new texel to nothing leaves a hole the live
+    // wallpaper underneath shows through.
+    vec4 fresh = texture(srcNew, uv) * (1.0 - liveNew);
+    vec4 color = mix(texture(srcOld, uv), fresh, reveal);
     fragColor = mix(color, vec4(1.0), ink) * qt_Opacity;
 }

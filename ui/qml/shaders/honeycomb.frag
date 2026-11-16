@@ -16,6 +16,7 @@ layout(std140, binding = 0) uniform buf {
     float progress;  // 0 = old wallpaper, 1 = new
     float aspect;    // width / height, so cells stay regular hexagons
     float cells;     // cells across the screen's height
+    float liveNew;   // 1 = the new wallpaper is live under the surface: draw nothing for it
 };
 
 layout(binding = 1) uniform sampler2D srcOld;
@@ -68,5 +69,8 @@ void main() {
     float feather = fwidth(edge) + 1e-4;
     float mask = smoothstep(radius + feather, radius - feather, edge);
 
-    fragColor = mix(texture(srcOld, uv), texture(srcNew, uv), mask) * qt_Opacity;
+    // Premultiplied: scaling the new texel to nothing leaves a hole the live
+    // wallpaper underneath shows through.
+    vec4 fresh = texture(srcNew, uv) * (1.0 - liveNew);
+    fragColor = mix(texture(srcOld, uv), fresh, mask) * qt_Opacity;
 }
