@@ -31,8 +31,16 @@ layout(binding = 3) uniform sampler2D srcMask;
 const float NEAR_TEXELS = 8.0;
 // Share of the animation spent drawing the outline before anything grows.
 const float DRAW_SHARE = 0.42;
+// Growth starts a little before the pens meet: both motions ease to a stop at
+// their ends, and run strictly one after the other they read as a stall.
+const float GROW_START = 0.35;
 const float LINE_HALF_PX = 0.9;
 const float LINE_ALPHA = 0.9;
+// Faint glow around the line, so it also reads on a bright, busy picture.
+const float HALO_PX = 3.5;
+const float HALO_ALPHA = 0.22;
+// Length of the pen tip's fade, as a share of the longest outline.
+const float TIP = 0.04;
 // The subject is small next to the scene; without a head start it would still
 // be filling in while the background is half done.
 const float INSIDE_COST = 0.35;
@@ -42,8 +50,8 @@ const float WANDER = 0.22;
 // Softness of the growing edge, at the outline and at the farthest point. It
 // widens with distance because the far field is stored coarsely out there, and
 // a hard edge would show that as terraces.
-const float FEATHER_NEAR = 0.012;
-const float FEATHER_FAR = 0.035;
+const float FEATHER_NEAR = 0.03;
+const float FEATHER_FAR = 0.09;
 
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -71,20 +79,24 @@ void main() {
 
     // Outline: the pen has passed wherever the arc coordinate is behind it.
     float draw = smoothstep(0.0, 1.0, clamp(progress / DRAW_SHARE, 0.0, 1.0));
-    float drawn = smoothstep(0.0, 0.015, draw * 1.02 - field.b);
+    float drawn = smoothstep(0.0, TIP, draw * (1.0 + TIP) - field.b);
     float line = 1.0 - smoothstep(LINE_HALF_PX - 0.6, LINE_HALF_PX + 0.6, abs(edgePx));
+    float halo = exp(-edgePx * edgePx / (2.0 * HALO_PX * HALO_PX)) * HALO_ALPHA;
 
     // Growth: the edge leaves the outline and wanders outwards. The noise is
     // faded in with distance so the growth starts exactly on the drawn line.
-    float grow = clamp((progress - DRAW_SHARE) / (1.0 - DRAW_SHARE), 0.0, 1.0);
+    float grow = clamp((progress - GROW_START) / (1.0 - GROW_START), 0.0, 1.0);
     float wander = (fbm(vec2(uv.x * aspect, uv.y) * 5.0 + seed * 31.0) - 0.5) * WANDER;
     float cost = far * mix(1.0, INSIDE_COST, inside) + wander * smoothstep(0.0, 0.08, far);
-    float front = pow(grow, 1.25) * (1.0 + 0.5 * WANDER + FEATHER_FAR);
+    // Eased at both ends: it leaves the line gently and settles into the far
+    // corners instead of snapping shut.
+    float eased = mix(grow, grow * grow * (3.0 - 2.0 * grow), 0.75);
+    float front = eased * (1.0 + 0.5 * WANDER + FEATHER_FAR);
     float feather = mix(FEATHER_NEAR, FEATHER_FAR, far);
     float reveal = smoothstep(0.0, feather, front - cost) * step(1e-4, grow);
 
     // The line has done its job once the scene starts growing from it.
-    float ink = line * drawn * LINE_ALPHA * (1.0 - smoothstep(0.0, 0.45, grow));
+    float ink = max(line * LINE_ALPHA, halo) * drawn * (1.0 - smoothstep(0.0, 0.5, grow));
 
     vec4 color = mix(texture(srcOld, uv), texture(srcNew, uv), reveal);
     fragColor = mix(color, vec4(1.0), ink) * qt_Opacity;

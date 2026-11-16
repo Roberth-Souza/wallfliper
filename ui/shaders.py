@@ -23,7 +23,7 @@ _SUFFIX = ".frag.qsb"
 # config.transition_duration is tuned for one-move animations. These play in
 # stages (draw the outline, then grow; seed, then spread) and read as rushed
 # at the same length, so they run this many times longer.
-_DURATION_SCALE = {"silhouette": 2.6, "colonies": 1.6}
+_DURATION_SCALE = {"silhouette": 3.0, "colonies": 1.6}
 
 
 def path_for(name: str) -> Path | None:
