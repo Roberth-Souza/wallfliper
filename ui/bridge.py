@@ -76,6 +76,12 @@ _SILHOUETTE_FALLBACK = "colonies"
 # Focus has to rest this long before silhouettes are queued around it, so
 # scrubbing through cards does not reorder the work on every step.
 _SILHOUETTE_SETTLE_MS = 250
+# A see-through shader switch (no still of the old wallpaper) applies the new
+# one only once the surface is opaque, then keeps covering this long while that
+# lands: a swww repaint, or mpvpaper's cold start. Running short is harmless
+# for a video — swww is already showing the same first frame underneath.
+_LATE_APPLY_IMAGE_MS = 300
+_LATE_APPLY_VIDEO_MS = 700
 
 # Qt hands filterAcceptsRow a transient or persistent index; accept the union
 # the base declares so type-checkers don't flag a narrowed override.
@@ -213,7 +219,7 @@ class Controller(QObject):
     # the configured animation is a shader swww cannot do (see ui/shaders.py).
     # Args: old wallpaper URL, new wallpaper URL, baked shader URL, field
     # texture URL ("" when the shader takes none), duration ms.
-    shaderTransitionRequested = Signal(str, str, str, str, int)
+    shaderTransitionRequested = Signal(str, str, str, str, int, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -459,7 +465,8 @@ class Controller(QObject):
             # shaderSurfaceReady); the real switch happens behind it, so the
             # apply itself is deferred, not skipped.
             self._pending_shader = entry
-            self._pending_hold = plan[-1] / 1000
+            # How long the surface still covers the screen after the apply.
+            self._pending_hold = (plan[5] if plan[0] == "" else plan[4]) / 1000
             self.shaderTransitionRequested.emit(*plan)
             return True
         self._apply_entry(entry, self._swww_transition(name))
@@ -482,15 +489,15 @@ class Controller(QObject):
 
     def _shader_plan(
         self, entry: WallpaperEntry, name: str
-    ) -> tuple[str, str, str, str, int] | None:
+    ) -> tuple[str, str, str, str, int, int] | None:
         """Arguments for a shader-painted switch, or None to use swww.
 
-        Requires everything the surface needs: a baked shader, a still on both
-        ends (the shader blends two textures), a previous wallpaper that still
-        exists to blend *from*, and for `silhouette` the new wallpaper's field
-        texture. A video can be the new end, as its first frame (see
-        `_still_of`), but not the old one: what is on screen for a playing
-        video is not a file. Anything missing falls back to swww.
+        Requires a baked shader, a still of the new wallpaper (a video's is its
+        first frame, see `_still_of`) and for `silhouette` that still's field
+        texture; anything missing falls back to swww. The old end is optional:
+        without a still of it (a playing video is not a file) the old URL is
+        empty and the surface runs see-through, painting over the live
+        wallpaper and applying the new one at the end.
         """
         shader_url = shaders.url_for(name)
         still = self._still_of(entry)
@@ -503,13 +510,11 @@ class Controller(QObject):
                 return None
             field_url = QUrl.fromLocalFile(str(field)).toString()
         previous = load_state()
-        if not previous.path or previous.kind != "image":
-            return None
-        old = Path(previous.path)
-        if not old.is_file():
-            return None
+        old_url = ""
+        if previous.path and previous.kind == "image" and Path(previous.path).is_file():
+            old_url = QUrl.fromLocalFile(previous.path).toString()
         return (
-            QUrl.fromLocalFile(str(old)).toString(),
+            old_url,
             QUrl.fromLocalFile(str(still)).toString(),
             shader_url,
             field_url,
@@ -517,13 +522,14 @@ class Controller(QObject):
                 1,
                 int(self._config.transition_duration * shaders.duration_scale(name) * 1000),
             ),
+            _LATE_APPLY_VIDEO_MS if entry.kind == "video" else _LATE_APPLY_IMAGE_MS,
         )
 
     @Slot()
     def shaderSurfaceReady(self) -> None:
-        """The surface is showing the old wallpaper: swap what's underneath.
+        """The surface hides the wallpaper: swap what's underneath.
 
-        Applying *now* rather than when the animation ends is what removes the
+        Applying behind the surface rather than after it is what removes the
         seam — by the time the surface is torn down the compositor already holds
         the new wallpaper, so there is no frame where neither is on screen.
         """

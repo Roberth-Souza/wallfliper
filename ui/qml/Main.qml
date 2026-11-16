@@ -150,14 +150,15 @@ Window {
         TransitionSurface {}
     }
 
-    function startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms) {
+    function startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs) {
         win.dropTransitionSurface()
         const surface = transitionComponent.createObject(null, {
             oldSource: oldUrl,
             newSource: newUrl,
             shaderUrl: shaderUrl,
             maskSource: maskUrl,
-            durationMs: ms
+            durationMs: ms,
+            lingerMs: lingerMs
         })
         if (surface === null) {          // shader or component broken
             win.finishTransition(false)
@@ -290,8 +291,8 @@ Window {
         function onFolderPickerClosed() { win.closeFolderPicker() }
         // Portal missing or the request failed: fall back to manual entry.
         function onFolderManualRequested() { win.showFolderEntry() }
-        function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, maskUrl, ms) {
-            win.startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms)
+        function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs) {
+            win.startShaderTransition(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs)
         }
         function onTransitionModeChanged() { modeTagTimer.restart() }
     }

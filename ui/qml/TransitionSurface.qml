@@ -19,6 +19,13 @@ import org.kde.layershell as LayerShell
 // signals `covered`, which is when the real wallpaper is applied underneath it.
 // So when the surface is destroyed at the end, the compositor is already showing
 // the new wallpaper — nothing flashes in the gap.
+//
+// With no `oldSource` (the old wallpaper is a playing video, or its file is
+// gone) the surface is *see-through* instead: the old texture is empty, so the
+// same shaders leave whatever is on screen visible and paint only the new
+// picture over it. Nothing may change underneath while that shows through, so
+// `covered` then fires at the END of the animation, once the surface is opaque,
+// and the surface lingers for `lingerMs` while the real switch happens behind it.
 Window {
     id: surface
 
@@ -29,10 +36,11 @@ Window {
     // the shaders that draw from it. Empty for the ones that don't.
     property url maskSource
     property int durationMs: 1000
+    property int lingerMs: 300
     // Hex cells across the screen's height. More cells = finer honeycomb.
     property real cells: 9
 
-    // The old wallpaper is on screen and it is safe to swap what's underneath.
+    // The surface hides the wallpaper: it is safe to swap what's underneath.
     signal covered()
     signal finished()
     // Either image failed to decode; the caller falls back to a plain swww switch.
@@ -56,7 +64,9 @@ Window {
     LayerShell.Window.exclusionZone: -1
 
     readonly property bool hasMask: maskSource.toString() !== ""
-    readonly property bool ready: oldImage.status === Image.Ready && newImage.status === Image.Ready
+    readonly property bool seeThrough: oldSource.toString() === ""
+    readonly property bool ready: (seeThrough || oldImage.status === Image.Ready)
+        && newImage.status === Image.Ready
         && (!hasMask || maskImage.status === Image.Ready)
     property bool started: false
 
@@ -71,9 +81,16 @@ Window {
         interval: 60
         onTriggered: {
             surface.started = true
-            surface.covered()
+            if (!surface.seeThrough)
+                surface.covered()
             reveal.start()
         }
+    }
+
+    Timer {
+        id: linger
+        interval: surface.lingerMs
+        onTriggered: surface.finished()
     }
 
     // Nothing here is allowed to hang: the caller may have hidden its window and
@@ -186,6 +203,13 @@ Window {
         // Linear: the shader already eases each cell individually, and the
         // caller times the video hand-off against this exact curve.
         easing.type: Easing.Linear
-        onFinished: surface.finished()
+        onFinished: {
+            if (surface.seeThrough) {
+                surface.covered()
+                linger.start()
+            } else {
+                surface.finished()
+            }
+        }
     }
 }
