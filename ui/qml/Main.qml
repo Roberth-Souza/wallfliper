@@ -194,6 +194,21 @@ Window {
         win.visible = false
     }
 
+    // A second launch while this one is up (the hotkey). Normally that closes
+    // it; hidden with a switch still landing, it comes back instead — the
+    // process is alive only for the animation, and quitting would cut it.
+    function toggle() {
+        if (win.visible) {
+            win.requestQuit()
+        } else if (win.quitAfterTransition) {
+            win.quitAfterTransition = false
+            win.visible = true
+            win.requestActivate()
+        } else {
+            Qt.quit()                    // hidden behind the folder chooser
+        }
+    }
+
     // A switch can be in flight before it has a surface: the frame of an
     // outgoing video is taken off-thread first.
     function switchInFlight() {
@@ -295,6 +310,7 @@ Window {
     Connections {
         target: controller
         function onFolderPickerClosed() { win.closeFolderPicker() }
+        function onToggleRequested() { win.toggle() }
         // Portal missing or the request failed: fall back to manual entry.
         function onFolderManualRequested() { win.showFolderEntry() }
         function onShaderTransitionRequested(oldUrl, newUrl, shaderUrl, maskUrl, ms, lingerMs) {

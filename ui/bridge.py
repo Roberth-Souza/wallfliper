@@ -253,6 +253,8 @@ class Controller(QObject):
     colorFilterChanged = Signal()
     cardLayoutChanged = Signal()
     transitionModeChanged = Signal()
+    # A second launch (the hotkey) asked the running instance to toggle.
+    toggleRequested = Signal()
     # Ask Main.qml to paint the switch itself on a layer-shell surface, because
     # the configured animation is a shader swww cannot do (see ui/shaders.py).
     # Args: old wallpaper URL, new wallpaper URL, baked shader URL, field
