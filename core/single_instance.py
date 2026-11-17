@@ -5,9 +5,13 @@ and a second press (while it's still up) should close it — never stack two
 overlays fighting for the keyboard (the same focus problem a second layer-shell
 window would cause). We enforce one live GUI by holding an exclusive advisory
 lock (`flock`) on a lock file for the whole process lifetime. A second launch
-can't take the lock, reads the running PID from the file, sends it SIGTERM to
-toggle it closed, and exits. The kernel drops a `flock` when its owner dies, so
-a crash never leaves a stale lock behind. Linux-only (`fcntl`), matching scope.
+can't take the lock, reads the running PID from the file, sends it
+`TOGGLE_SIGNAL` and exits. The running instance decides what the toggle means:
+normally it closes, but while its overlay is hidden waiting for a wallpaper
+switch to finish painting it shows the overlay again instead of dying
+mid-animation — which is why the toggle is not SIGTERM. The kernel drops a
+`flock` when its owner dies, so a crash never leaves a stale lock behind.
+Linux-only (`fcntl`), matching scope.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ import fcntl
 import os
 import signal
 from pathlib import Path
+
+TOGGLE_SIGNAL = signal.SIGUSR1
 
 
 def _lock_path() -> Path:
@@ -39,8 +45,8 @@ class SingleInstance:
         """Become the sole instance.
 
         Returns True if we took the lock (the caller should launch the GUI).
-        Returns False if another instance already holds it — in which case we've
-        signalled that instance to quit (the toggle) and the caller should exit.
+        Returns False if another instance already holds it — in which case that
+        instance was sent the toggle and the caller should exit.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -58,7 +64,7 @@ class SingleInstance:
 
     @staticmethod
     def _toggle_running(fd: int) -> None:
-        """Tell the instance that currently holds the lock to quit (SIGTERM)."""
+        """Send the toggle to the instance that currently holds the lock."""
         try:
             os.lseek(fd, 0, os.SEEK_SET)
             pid = int(os.read(fd, 32).decode().strip() or 0)
@@ -66,7 +72,7 @@ class SingleInstance:
             return
         if pid > 0:
             try:
-                os.kill(pid, signal.SIGTERM)
+                os.kill(pid, TOGGLE_SIGNAL)
             except ProcessLookupError:
                 pass  # already gone; this launch will simply take the lock
 

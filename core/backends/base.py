@@ -28,6 +28,18 @@ class ImageTransition:
     wave). None means "leave swww's default", which is what a raw type gets;
     presets fill them in. Resolve a transition through `transitions.resolve`
     before reading these — a preset name carries its parameters implicitly.
+
+    `hold` is for a caller that paints the switch itself, on a surface above
+    the wallpaper: the seconds that surface will keep covering the screen. A
+    video then stays paused on its first frame until the cover lifts; images
+    ignore it.
+
+    `ready_fd` goes further for a cover that can turn see-through: the write
+    end of a pipe. The video then starts playing as soon as it is on screen,
+    *under* the cover, and one byte is written to the pipe at that moment so
+    the caller can let it show through. Closed without a byte when the video
+    never came up that way. The caller owns the read end and closes its own
+    copy of the write end once the apply returns.
     """
 
     type: str = "random"
@@ -37,6 +49,8 @@ class ImageTransition:
     pos: str | None = None
     bezier: str | None = None
     wave: str | None = None
+    hold: float = 0.0
+    ready_fd: int | None = None
 
 
 class BackendError(RuntimeError):
@@ -67,6 +81,17 @@ class WallpaperBackend(ABC):
         (no still, no animation) — used on login restore, where there is no
         prior frame to transition from.
         """
+
+    def freeze_video(self, dest: Path) -> Path | None:
+        """Pause the video wallpaper on screen and save the frame it shows.
+
+        Gives a caller that paints the switch itself a still of a wallpaper
+        that is otherwise not a file. `dest` names the file without its
+        suffix; the image actually written is returned. None (and the video
+        left playing) when there is no video wallpaper or its frame cannot be
+        taken. Slow enough to stay off the UI thread.
+        """
+        return None
 
     @abstractmethod
     def is_available(self) -> bool:

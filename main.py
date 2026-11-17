@@ -12,12 +12,13 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from core.backends import BackendError, get_backend
 from core.deps import all_required_ok, check, format_report, missing, pyside6_present
 from core.integrations import notify_color_tools
-from core.single_instance import SingleInstance
+from core.single_instance import TOGGLE_SIGNAL, SingleInstance
 from core.state import config_dir, load_config, load_state
 
 
@@ -98,15 +99,17 @@ def _prepend_system_qt_paths() -> None:
             os.environ[var] = path + (os.pathsep + existing if existing else "")
 
 
-def _install_signal_quit(app) -> tuple:
-    """Quit the Qt loop on SIGTERM/SIGINT, event-driven (the self-pipe trick).
+def _install_signal_handlers(app, on_toggle: Callable[[], None]) -> tuple:
+    """Handle signals inside the Qt loop, event-driven (the self-pipe trick).
 
-    A second launch toggles us off by sending SIGTERM (see SingleInstance). Qt's
-    C++ event loop doesn't yield to Python between iterations, so a plain Python
-    signal handler wouldn't run until the loop happened to wake. We route signals
-    through a socketpair watched by a QSocketNotifier: the signal writes a byte,
-    the notifier fires inside the Qt loop and quits cleanly (releasing the lock).
-    No polling timer. The returned objects must stay referenced for the app's life.
+    SIGTERM/SIGINT quit. The toggle signal a second launch sends (see
+    SingleInstance) calls `on_toggle` instead: toggling is the UI's decision,
+    because a wallpaper switch still being painted must not be cut short by it.
+    Qt's C++ event loop doesn't yield to Python between iterations, so a plain
+    Python signal handler wouldn't run until the loop happened to wake. Signals
+    are routed through a socketpair watched by a QSocketNotifier: the signal
+    writes its number as a byte and the notifier fires inside the Qt loop. No
+    polling timer. The returned objects must stay referenced for the app's life.
     """
     import socket
 
@@ -119,17 +122,21 @@ def _install_signal_quit(app) -> tuple:
 
     notifier = QSocketNotifier(reader.fileno(), QSocketNotifier.Type.Read)
 
-    def _drain_and_quit() -> None:
+    def _dispatch() -> None:
         try:
-            reader.recv(64)  # drain the wakeup byte(s)
+            signums = reader.recv(64)  # one byte per signal received
         except OSError:
-            pass
-        app.quit()
+            return
+        if any(signum != TOGGLE_SIGNAL for signum in signums):
+            app.quit()
+            return
+        for _ in signums:
+            on_toggle()
 
-    notifier.activated.connect(_drain_and_quit)
+    notifier.activated.connect(_dispatch)
     # Replace the default terminate action with a no-op so the wakeup byte — not
-    # an abrupt kill — is what drives the graceful quit above.
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # an abrupt kill — is what drives the handling above.
+    for sig in (signal.SIGINT, signal.SIGTERM, TOGGLE_SIGNAL):
         signal.signal(sig, lambda *_: None)
     return reader, writer, notifier
 
@@ -165,9 +172,9 @@ def _run_gui() -> int:
     app.setApplicationName("wallfliper")
     app.setDesktopFileName("wallfliper")  # Wayland app_id
 
-    signal_guard = _install_signal_quit(app)  # keep referenced until exec returns
-
     controller = Controller()
+    # Keep referenced until exec returns.
+    signal_guard = _install_signal_handlers(app, controller.toggleRequested.emit)
     engine = QQmlApplicationEngine()
     engine.addImportPath(_SYSTEM_QT_QML)
     engine.rootContext().setContextProperty("controller", controller)

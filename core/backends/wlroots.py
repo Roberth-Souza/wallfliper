@@ -14,12 +14,14 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from ..firstframe import first_frame
+from ..seamless import Ipc
 from ..state import cache_dir
 from . import transitions as tr
 from .base import (
@@ -38,9 +40,9 @@ _SWWW_CANDIDATES = ("swww", "awww")
 # (broken hwdec/vo, scripts) is a common cause of a wallpaper that never plays.
 # osd-level=0 hides mpv's corner messages over the wallpaper (`no-osd` is not
 # an mpv option — it is rejected at startup). Hardware decode +
-# high-quality scaling do the rest. The initial pause state is appended per-launch
-# (see _mpvpaper_cmd): a hard cut starts playing at once, the seamless lead-in
-# starts paused on frame 0 and is unpaused over IPC.
+# high-quality scaling do the rest. The initial pause state and the IPC socket
+# are appended per-launch (see _mpvpaper_cmd): a hard cut starts playing at
+# once, the seamless lead-in starts paused on frame 0 and is unpaused over IPC.
 #
 # video-sync stays on mpv's default decoupled (audio/system) clock rather than
 # display-resample: a wallpaper outlives DPMS sleep and suspend, and slaving
@@ -93,7 +95,40 @@ _VIDEO_SWAP_DELAY_S = 0.8
 # the final image. How early that is safe depends entirely on the curve, which
 # is why the cap alone is not enough.
 _MPV_PREWARM_MAX_S = 0.6
+_IPC_OPTION = "--input-ipc-server="
+_IPC_SOCKET_GLOB = "wallfliper-mpv-*.sock"
+# freeze_video. mpv can only write its own frame when it decodes in software;
+# that one goes out as a JPEG, which it encodes far faster than a PNG.
+_FREEZE_CONNECT_TIMEOUT_S = 0.3
+_FREEZE_SHOT_TIMEOUT_S = 1.0
+_FREEZE_JPEG_QUALITY = 95
+# Otherwise ffmpeg extracts the frame the video will be showing a moment from
+# now, and the pause is timed to land on it. The lead has to cover ffmpeg
+# decoding from the previous keyframe, which scales with the picture: measured
+# at ~0.12 s for 1080p with one-second keyframes and ~0.7 s for 4K with
+# eight-second ones. Erring long only delays the switch (the video keeps
+# playing meanwhile); erring short costs a second extraction.
+_FREEZE_LEAD_BASE_S = 0.12
+_FREEZE_LEAD_PER_MEGAPIXEL_S = 0.07
+# How far the pause may land from the extracted frame and still pass for it:
+# a few frames of drift vanish in the stop itself.
+_FREEZE_TOLERANCE_S = 0.1
+# No landing a pause on a frame across the loop point; mpv's restart there is
+# not on the clock.
+_FREEZE_LOOP_MARGIN_S = 0.25
+_FREEZE_EXTRACT_TIMEOUT_S = 3.0
+# mpv's names for what it decodes the video with, as ffmpeg's scale filter
+# takes them. Passed on so the still is converted exactly like the picture on
+# screen: left alone, ffmpeg reads an untagged stream as BT.601 where mpv
+# guesses BT.709 for HD, and the cover would shift colour as it lands.
+_FFMPEG_MATRIX = {"bt.709": "bt709", "bt.601": "bt601", "bt.2020-ncl": "bt2020"}
+_FFMPEG_RANGE = {"limited": "tv", "full": "pc"}
 _SEAMLESS_DRIVER = Path(__file__).resolve().parent.parent / "seamless.py"
+
+
+def _number(value: object, default: float) -> float:
+    """`value` as a float when mpv reported a number, else `default`."""
+    return float(value) if isinstance(value, (int, float)) else default
 
 
 class WlrootsBackend(WallpaperBackend):
@@ -116,6 +151,7 @@ class WlrootsBackend(WallpaperBackend):
     def set_image(self, path: Path, transition: ImageTransition | None = None) -> None:
         self._cancel_pending_transition()  # a pending video must not map over the image
         self._stop_video()
+        self._sweep_ipc_sockets()
         tool = self._resolve(_SWWW_CANDIDATES)
         self._ensure_daemon(tool)
         if transition is not None:
@@ -157,6 +193,7 @@ class WlrootsBackend(WallpaperBackend):
         # already mapped — it gets retired below instead of lingering frozen.
         had_pending = self._cancel_pending_transition()
         old_pids = self._mpvpaper_pids()
+        self._sweep_ipc_sockets(old_pids)
         # Already rendering this exact file → no-op, avoid stacking a 2nd GPU
         # decoder. Skipped when a driver was just cancelled: that mpvpaper is
         # paused on frame 0 and its un-pauser is now dead, so it must be redone.
@@ -174,7 +211,7 @@ class WlrootsBackend(WallpaperBackend):
             return
         # Hard cut (restore on login, or no ffmpeg/swww to fake a transition).
         # -p: auto-pause when hidden (the MVP fullscreen auto-pause).
-        self._spawn_detached(self._mpvpaper_cmd(mpvpaper, path))
+        self._spawn_detached(self._mpvpaper_cmd(mpvpaper, path, self._ipc_socket_path()))
         if old_pids:
             # Video -> video: killing the old mpvpaper first would briefly uncover
             # swww's stale background during the new one's startup. Instead we let
@@ -182,6 +219,162 @@ class WlrootsBackend(WallpaperBackend):
             # once the new surface has mapped — a seamless swap. Detached so it
             # outlives our GUI, which exits immediately after Enter.
             self._retire_pids(old_pids)
+
+    def freeze_video(self, dest: Path) -> Path | None:
+        """Pause the running mpvpaper and save the frame it stops on.
+
+        Driven over the IPC socket every instance is launched with; an
+        mpvpaper with no reachable socket (started by an older version, or by
+        hand) simply reports None.
+
+        mpv writes the frame itself when it can, which is only while decoding
+        in software: a hardware frame never reaches its screenshot code under
+        mpvpaper (libmpv without a renderer of its own to read back from).
+        Everything else goes through ffmpeg, see `_freeze_by_extraction`.
+        """
+        pids = self._mpvpaper_pids()
+        if len(self._groups_of(pids)) != 1:
+            return None  # none, or a swap in flight: no single picture to take
+        sock = next((s for s in map(self._ipc_socket_of, pids) if s), None)
+        if sock is None:
+            return None
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(_FREEZE_CONNECT_TIMEOUT_S)
+        try:
+            conn.connect(sock)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            conn.close()
+            return None
+        with conn:
+            ipc = Ipc(conn)
+            _, hwdec = ipc.command("get_property", "hwdec-current")
+            if hwdec in (None, "", "no"):
+                shot = self._freeze_by_screenshot(ipc, dest.with_suffix(".jpg"))
+                if shot is not None:
+                    return shot
+            return self._freeze_by_extraction(ipc, dest.with_suffix(".bmp"))
+
+    @staticmethod
+    def _freeze_by_screenshot(ipc: Ipc, dest: Path) -> Path | None:
+        """Pause, then have mpv write the frame it is showing.
+
+        Paused first so the picture cannot move on between the shot and the
+        caller covering it; unpaused again if the shot fails.
+        """
+        paused, _ = ipc.command("set_property", "pause", True)
+        if not paused:
+            return None
+        ipc.command("set_property", "screenshot-jpeg-quality", _FREEZE_JPEG_QUALITY)
+        try:
+            dest.unlink(missing_ok=True)  # a stale frame must not pass for this one
+            # "video": the bare frame, without mpv's scaling or OSD.
+            ipc.command(
+                "screenshot-to-file", str(dest), "video", timeout=_FREEZE_SHOT_TIMEOUT_S
+            )
+            if dest.stat().st_size > 0:
+                return dest
+        except OSError:
+            pass
+        ipc.command("set_property", "pause", False)
+        return None
+
+    def _freeze_by_extraction(self, ipc: Ipc, dest: Path) -> Path | None:
+        """Extract a frame slightly ahead of the playhead and pause on it.
+
+        ffmpeg needs a while to reach an arbitrary frame (it decodes from the
+        keyframe before it). Pausing first would leave the wallpaper standing
+        still for all of that, so the frame is taken from where the video is
+        about to be instead, and the pause is sent as the playhead gets there:
+        the video keeps moving until its still is ready.
+
+        When that cannot be lined up (too close to the loop point, or the
+        pause landed off the mark because extraction outran the lead or the
+        video was not advancing) the frame is extracted again for wherever the
+        pause did land, which is exact but waits on ffmpeg while frozen.
+        """
+        ffmpeg = shutil.which("ffmpeg")
+        got_path, video = ipc.command("get_property", "path")
+        if ffmpeg is None or not got_path or not isinstance(video, str):
+            return None
+        _, params = ipc.command("get_property", "video-params")
+        if not isinstance(params, dict):
+            params = {}
+        megapixels = _number(params.get("w"), 0.0) * _number(params.get("h"), 0.0) / 1e6
+        lead = _FREEZE_LEAD_BASE_S + _FREEZE_LEAD_PER_MEGAPIXEL_S * megapixels
+
+        target = self._time_pos(ipc)
+        if target is not None:
+            target += lead
+            _, duration = ipc.command("get_property", "duration")
+            if target > _number(duration, float("inf")) - _FREEZE_LOOP_MARGIN_S:
+                target = None
+        if target is not None:
+            if not self._extract_frame(ffmpeg, video, target, params, dest):
+                return None  # ffmpeg cannot do it at all; nothing was paused
+            now = self._time_pos(ipc)
+            if now is not None and 0 < target - now <= lead:
+                time.sleep(target - now)
+        paused, _ = ipc.command("set_property", "pause", True)
+        if not paused:
+            return None
+        landed = self._time_pos(ipc)
+        if landed is None:
+            ipc.command("set_property", "pause", False)
+            return None
+        if target is not None and abs(landed - target) <= _FREEZE_TOLERANCE_S:
+            return dest
+        if self._extract_frame(ffmpeg, video, landed, params, dest):
+            return dest
+        ipc.command("set_property", "pause", False)
+        return None
+
+    @staticmethod
+    def _time_pos(ipc: Ipc) -> float | None:
+        """Timestamp of the frame mpv is showing, or None if it has none."""
+        ok, pos = ipc.command("get_property", "time-pos")
+        return float(pos) if ok and isinstance(pos, (int, float)) else None
+
+    @staticmethod
+    def _extract_frame(
+        ffmpeg: str, video: str, pos: float, params: dict, dest: Path
+    ) -> bool:
+        """Write the frame `video` shows at `pos` seconds to `dest`.
+
+        `params` is mpv's `video-params` for the same file. The suffix of
+        `dest` picks the format; an uncompressed one costs nothing to encode
+        at wallpaper sizes.
+        """
+        conversion = [
+            f"{option}={names[params[key]]}"
+            for key, option, names in (
+                ("colormatrix", "in_color_matrix", _FFMPEG_MATRIX),
+                ("colorlevels", "in_range", _FFMPEG_RANGE),
+            )
+            if params.get(key) in names
+        ]
+        cmd = [
+            ffmpeg, "-nostdin", "-v", "error", "-y",
+            # A hair early: the first frame at or after the mark is the one
+            # wanted, and mpv's timestamp is rounded.
+            "-ss", f"{max(0.0, pos - 0.001):.6f}",
+            "-i", video,
+            *(["-vf", "scale=" + ":".join(conversion)] if conversion else []),
+            "-frames:v", "1", "-update", "1", str(dest),
+        ]  # fmt: skip
+        try:
+            dest.unlink(missing_ok=True)  # a stale frame must not pass for this one
+            done = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                timeout=_FREEZE_EXTRACT_TIMEOUT_S,
+                check=False,
+            )
+            return done.returncode == 0 and dest.stat().st_size > 0
+        except (subprocess.SubprocessError, OSError):
+            return False
 
     def _transition_into_video(
         self,
@@ -235,16 +428,25 @@ class WlrootsBackend(WallpaperBackend):
             self._kill_pids(old_pids)  # reveal swww so its transition shows
         instant = transition.type in ("none", "simple")
         duration = 0.0 if instant else transition.duration
+        prewarm = self._prewarm_for(transition, duration)
+        if transition.hold > 0:
+            # The caller is covering the screen: mpv can cold-start behind the
+            # cover right away, whatever the easing, and starts moving as the
+            # cover lifts.
+            duration = prewarm = transition.hold
         sock = self._ipc_socket_path()
         cfg = json.dumps(
             {
-                "cmd": self._mpvpaper_cmd(mpvpaper, path, ipc_socket=sock),
+                "cmd": self._mpvpaper_cmd(mpvpaper, path, sock, paused=True),
                 # Hard-cut command the driver falls back to if the IPC unpause
                 # never lands, so a failed handoff plays instead of freezing.
-                "fallback": self._mpvpaper_cmd(mpvpaper, path),
+                "fallback": self._mpvpaper_cmd(mpvpaper, path, self._ipc_socket_path()),
                 "sock": sock,
                 "duration": duration,
-                "prewarm": self._prewarm_for(transition, duration),
+                "prewarm": prewarm,
+                # Live mode: unpause as soon as mpv is up under the caller's
+                # cover and say so on this descriptor (see ImageTransition).
+                "ready_fd": transition.ready_fd,
             }
         )
         # The driver runs in its own process: it launches mpvpaper paused on the
@@ -253,7 +455,8 @@ class WlrootsBackend(WallpaperBackend):
         # exactly when the animation ends, not a cold-start later. Tracked so a
         # quick follow-up apply can cancel it before it maps a now-stale video.
         self._pending_driver = self._spawn_detached(
-            [sys.executable, str(_SEAMLESS_DRIVER), cfg]
+            [sys.executable, str(_SEAMLESS_DRIVER), cfg],
+            pass_fds=() if transition.ready_fd is None else (transition.ready_fd,),
         )
         self._pending_sock = sock
         self._record_pending(self._pending_driver.pid, sock)
@@ -369,11 +572,16 @@ class WlrootsBackend(WallpaperBackend):
             return False
 
     @staticmethod
-    def _ipc_socket_path() -> str:
-        """A fresh mpv IPC socket path (unique per launch, never stale)."""
+    def _ipc_dir() -> Path:
+        """Where mpv IPC sockets live: the runtime dir, else the cache dir."""
         runtime = os.environ.get("XDG_RUNTIME_DIR")
-        base = Path(runtime) if runtime else cache_dir()
-        if runtime is None:
+        return Path(runtime) if runtime else cache_dir()
+
+    @classmethod
+    def _ipc_socket_path(cls) -> str:
+        """A fresh mpv IPC socket path (unique per launch, never stale)."""
+        base = cls._ipc_dir()
+        if os.environ.get("XDG_RUNTIME_DIR") is None:
             # XDG_RUNTIME_DIR is normally always set on a live Wayland session;
             # the cache-dir fallback may not exist yet, and mpv won't create the
             # socket's parent — without it the IPC handoff fails and the seamless
@@ -385,18 +593,49 @@ class WlrootsBackend(WallpaperBackend):
         return str(base / f"wallfliper-mpv-{time.monotonic_ns()}.sock")
 
     @staticmethod
-    def _mpvpaper_cmd(mpvpaper: str, path: Path, ipc_socket: str | None = None) -> list[str]:
+    def _ipc_socket_of(pid: int) -> str | None:
+        """The IPC socket an mpvpaper PID was launched with, if it still exists."""
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                cmdline = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            return None
+        _, found, rest = cmdline.partition(_IPC_OPTION)
+        if not found:
+            return None
+        # The mpv options travel as one space-separated argv entry.
+        sock = rest.split(" ", 1)[0]
+        return sock if sock and Path(sock).exists() else None
+
+    def _sweep_ipc_sockets(self, pids: list[int] | None = None) -> None:
+        """Remove IPC sockets no running mpvpaper owns.
+
+        A socket outlives the transition it was made for (freeze_video needs
+        it later), so nothing unlinks it when its mpvpaper is killed. Sweeping
+        on apply keeps the leftovers to the last instance or two.
+        """
+        if pids is None:
+            pids = self._mpvpaper_pids()
+        owned = {self._ipc_socket_of(pid) for pid in pids}
+        try:
+            for sock in self._ipc_dir().glob(_IPC_SOCKET_GLOB):
+                if str(sock) not in owned:
+                    sock.unlink(missing_ok=True)
+        except OSError:
+            pass  # housekeeping only
+
+    @staticmethod
+    def _mpvpaper_cmd(
+        mpvpaper: str, path: Path, ipc_socket: str, paused: bool = False
+    ) -> list[str]:
         """argv for a detached, auto-pausing mpvpaper covering every output.
 
-        Without `ipc_socket` it is a hard cut: start playing immediately. With
-        one it starts paused on frame 0 with an IPC server, for the seamless
-        driver to unpause once the transition has finished.
+        Plays at once (a hard cut) unless `paused`, which holds it on frame 0
+        for the seamless driver to unpause. Every instance gets an IPC server:
+        the driver's handoff needs it, and so does freeze_video later on.
         """
-        opts = _MPV_OPTIONS
-        if ipc_socket is None:
-            opts += " pause=no"
-        else:
-            opts += f" pause=yes --input-ipc-server={ipc_socket}"
+        pause = "yes" if paused else "no"
+        opts = f"{_MPV_OPTIONS} pause={pause} {_IPC_OPTION}{ipc_socket}"
         return [mpvpaper, "-p", "-o", opts, _ALL_OUTPUTS, str(path)]
 
     # --- helpers --------------------------------------------------------
@@ -539,7 +778,7 @@ class WlrootsBackend(WallpaperBackend):
         return result
 
     @staticmethod
-    def _spawn_detached(cmd: list[str]) -> subprocess.Popen:
+    def _spawn_detached(cmd: list[str], pass_fds: tuple[int, ...] = ()) -> subprocess.Popen:
         """Launch a fully detached process (survives GUI exit); return its handle."""
         return subprocess.Popen(
             cmd,
@@ -547,4 +786,5 @@ class WlrootsBackend(WallpaperBackend):
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            pass_fds=pass_fds,
         )
