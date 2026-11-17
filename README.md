@@ -19,7 +19,7 @@ Pick a still image or a looping video, hit `Enter`, done.
 <div align="center">
 
 
-![Demonstração do Wallfliper](https://github.com/user-attachments/assets/3a3bb80b-213b-46e7-9703-ea75c17b1330)
+https://github.com/user-attachments/assets/e4942c78-0e1e-4820-b66b-27ede3748a1a
 
 
 </div>
@@ -30,10 +30,11 @@ Pick a still image or a looping video, hit `Enter`, done.
 
 - **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
 - **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
-- **Smooth transitions** — animated switches for both images and video
+- **Smooth transitions** — animated switches for both images and video: sweeps, ripples and irises, plus hexagon-grid and pixel-colony reveals painted by Wallfliper itself.
 - **Silhouette transition** — press `m` and a thin line draws the outline of the new wallpaper's character before the rest of the picture grows out of it; wallpapers without one spread in pixel colonies instead (optional, needs `onnxruntime`).
 - **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
-- **Two card layouts** — the focused card either pushes its neighbours aside or opens over them; `t` toggles, and the choice is remembered.
+- **Four card layouts** — a strip where the focused card pushes its neighbours aside (**push**) or opens over them (**overlay**), a cover-flow arc (**flow**), and a full-screen endless hexagon grid (**honeycomb**); `t` cycles, and the choice is remembered.
+- **Filter by kind or color** — images only, videos only, or pick a swatch and see just the wallpapers dominated by that color.
 - **Audition mode** — `Space` applies a wallpaper but keeps the picker open, so you can flip through options on your real desktop.
 - **Lightweight & on-demand** — launches when you call it, exits cleanly, and never idles in the background. Rendering is handed to detached daemons.
 - **Restore on login** — remembers your last wallpaper so a video survives a reboot.
@@ -74,7 +75,7 @@ Install from source — works on any supported compositor:
 | `swww` *or* `awww` | image wallpapers (auto-detected) | image support |
 | `mpvpaper` | video wallpapers | video support |
 | `ffmpeg` | video thumbnails, previews & color extraction | video extras |
-| `onnxruntime` (Python) | the **silhouette** transition — Arch: `python-onnxruntime-cpu`. Downloads two ~170 MB segmentation models (the second only if some wallpaper has no illustrated character) to `~/.local/share/wallfliper/models/` the first time the mode is used | optional |
+| `onnxruntime` + `numpy` (Python) | the **silhouette** transition — Arch: `python-onnxruntime-cpu` (pulls in `python-numpy`). Downloads two ~170 MB segmentation models (the second only if some wallpaper has no illustrated character) to `~/.local/share/wallfliper/models/` the first time the mode is used | optional |
 
 **On Arch / CachyOS** — copy-paste:
 
@@ -82,6 +83,8 @@ Install from source — works on any supported compositor:
 sudo pacman -S pyside6 layer-shell-qt swww ffmpeg
 
 paru -S mpvpaper
+
+sudo pacman -S python-onnxruntime-cpu   # optional: silhouette transition
 ```
 
 **On other distros** — install them with your package manager (names vary, e.g.
@@ -135,7 +138,7 @@ binds { Mod+W { spawn "python" "/path/to/wallfliper/main.py"; } }
 | `Enter` | Apply selected wallpaper **and close** |
 | `Space` | Apply but **keep open** (audition on your desktop) |
 | `r` | **Select a random wallpaper** (doesn't apply it) |
-| `t` | Switch card layout: **push** → **overlay** → **flow** (remembered) |
+| `t` | Switch card layout: **push** → **overlay** → **flow** → **honeycomb** (remembered) |
 | `m` | Show the animation mode in the bar for a moment; press again while it shows to switch **random** ↔ **silhouette** (remembered) |
 | `Shift+D` | **Delete** the selected wallpaper file (moved to the trash, no confirmation) |
 | `Esc` | Close (or close the settings panel) |
