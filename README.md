@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/e4942c78-0e1e-4820-b66b-27ede3748a1a
 - **Keyboard-first** — arrow keys / `hjkl` / `wasd` to move, `/` to filter, `Enter` to apply. No mouse needed, but it works too (click to select, double-click to apply).
 - **Images _and_ video wallpapers** — via [`swww`](https://github.com/LGFae/swww), looping video via [`mpvpaper`](https://github.com/GhostNaN/mpvpaper).
 - **Smooth transitions** — animated switches for both images and video: sweeps, ripples and irises, plus hexagon-grid and pixel-colony reveals painted by Wallfliper itself.
-- **Silhouette transition** — press `m` and a thin line draws the outline of the new wallpaper's character before the rest of the picture grows out of it; wallpapers without one spread in pixel colonies instead (optional, needs `onnxruntime`).
+- **Silhouette transition** — press `m` and a thin line draws the outline of the new wallpaper's subject (a character, or any object that stands out) before the rest of the picture grows out of it; wallpapers without one spread in pixel colonies instead (optional, needs `onnxruntime`).
 - **Live previews** — selecting a video plays a short looping clip right on its thumbnail.
 - **Four card layouts** — a strip where the focused card pushes its neighbours aside (**push**) or opens over them (**overlay**), a cover-flow arc (**flow**), and a full-screen endless hexagon grid (**honeycomb**); `t` cycles, and the choice is remembered.
 - **Filter by kind or color** — images only, videos only, or pick a swatch and see just the wallpapers dominated by that color.
@@ -75,7 +75,7 @@ Install from source — works on any supported compositor:
 | `swww` *or* `awww` | image wallpapers (auto-detected) | image support |
 | `mpvpaper` | video wallpapers | video support |
 | `ffmpeg` | video thumbnails, previews & color extraction | video extras |
-| `onnxruntime` + `numpy` (Python) | the **silhouette** transition — Arch: `python-onnxruntime-cpu` (pulls in `python-numpy`). Downloads two ~170 MB segmentation models (the second only if some wallpaper has no illustrated character) to `~/.local/share/wallfliper/models/` the first time the mode is used | optional |
+| `onnxruntime` + `numpy` (Python) | the **silhouette** transition — Arch: `python-onnxruntime-cpu` (pulls in `python-numpy`). Downloads two ~170 MB segmentation models (the second only if some wallpaper has no illustrated character) to `~/.local/share/wallfliper/models/` the first time the mode is used. Outlines are traced in a separate process that peaks at ~1.3 GB of RAM while it works through the library, then exits | optional |
 
 **On Arch / CachyOS** — copy-paste:
 
