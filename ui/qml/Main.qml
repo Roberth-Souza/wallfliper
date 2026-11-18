@@ -7,8 +7,9 @@ import org.kde.layershell as LayerShell
 Window {
     id: win
     visible: true
-    width: Screen.width
-    height: Screen.height
+    // No width/height: anchored on all four edges, the compositor sizes the
+    // surface to the output it picks (wantsToBeOnActiveScreen below). `Screen`
+    // would report Qt's idea of the screen, which can be a different output.
     // Transparent surface: there is no backdrop panel — the desktop shows
     // through everywhere except the floating bar and the wallcards. The bar is
     // painted with alpha (Theme.bg) so a Hyprland `layerrule = blur,
@@ -31,6 +32,9 @@ Window {
     // surface (visible = false), releasing the keyboard grab so the portal
     // chooser is topmost and focused.
     LayerShell.Window.scope: "wallfliper"
+    // Open on the focused output, not wherever Qt maps the window by default.
+    // Not `screenConfiguration`: older layer-shell-qt 6.x lacks it.
+    LayerShell.Window.wantsToBeOnActiveScreen: true
     LayerShell.Window.layer: LayerShell.Window.LayerOverlay
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityExclusive
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
