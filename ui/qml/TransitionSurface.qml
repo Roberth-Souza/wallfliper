@@ -52,8 +52,18 @@ Window {
     signal failed()
 
     visible: true
-    width: Screen.width
-    height: Screen.height
+    // Sized by the compositor (all four edges anchored), like the overlay.
+    // Decode size is fixed up front: tracking the surface size would re-decode
+    // both images when the first configure arrives. Largest output, so no
+    // output upscales.
+    readonly property size decodeSize: {
+        let w = 0, h = 0
+        for (const s of Qt.application.screens) {
+            w = Math.max(w, s.width)
+            h = Math.max(h, s.height)
+        }
+        return Qt.size(Math.round(w * 1.5), Math.round(h * 1.5))
+    }
     // Transparent, not black: the surface maps as soon as it is created, but the
     // wallpapers behind the shader decode asynchronously, so for that whole
     // decode there is nothing to draw. An opaque clear colour would be painted
@@ -63,6 +73,8 @@ Window {
     color: "transparent"
 
     LayerShell.Window.scope: "wallfliper-transition"
+    // Same output as the overlay, where the user is looking.
+    LayerShell.Window.wantsToBeOnActiveScreen: true
     LayerShell.Window.layer: LayerShell.Window.LayerBottom
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
@@ -145,7 +157,7 @@ Window {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: false
-        sourceSize: Qt.size(Math.round(Screen.width * 1.5), Math.round(Screen.height * 1.5))
+        sourceSize: surface.decodeSize
         onStatusChanged: {
             if (status === Image.Ready) oldTexture.scheduleUpdate()
             else if (status === Image.Error) surface.failed()
@@ -159,7 +171,7 @@ Window {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: false
-        sourceSize: Qt.size(Math.round(Screen.width * 1.5), Math.round(Screen.height * 1.5))
+        sourceSize: surface.decodeSize
         onStatusChanged: {
             if (status === Image.Ready) newTexture.scheduleUpdate()
             else if (status === Image.Error) surface.failed()

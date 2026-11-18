@@ -921,18 +921,16 @@ class Controller(QObject):
 
     @staticmethod
     def _transition_fps() -> int:
-        """Frame rate for the swww switch animation, matched to the display.
+        """Frame rate for the swww switch animation, matched to the displays.
 
         swww renders the transition's frames in software for its duration
-        (~1s) only — there is no steady-state cost — so we pace it to the
-        monitor's refresh rate: smoother frames the display can't show are
-        wasted. Qt knows the rate without any compositor-specific call; fall
-        back to 60 if no screen is reported. Floored so an odd/low value can't
-        make the animation choppy.
+        (~1s) only — there is no steady-state cost. It animates every output
+        at one rate, so the fastest refresh wins: a lower rate visibly stutters
+        on the faster output, while frames a slower output can't show only cost
+        CPU for that second. Floored at 60 so an odd/missing value can't make
+        the animation choppy.
         """
-        screen = QGuiApplication.primaryScreen()
-        rate = round(screen.refreshRate()) if screen else 0
-        return max(rate, 60)
+        return max([60, *(round(s.refreshRate()) for s in QGuiApplication.screens())])
 
 
 def _to_local_path(folder: str) -> str | None:
